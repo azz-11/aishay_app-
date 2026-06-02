@@ -11,135 +11,112 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen>
-    with TickerProviderStateMixin {
-  late AnimationController _phase1Ctrl;
-  late AnimationController _phase2Ctrl;
-  late Animation<double> _phase1Fade;
-  late Animation<double> _phase2Fade;
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _fade;
 
   @override
   void initState() {
     super.initState();
-    _phase1Ctrl = AnimationController(
+    _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
-    _phase2Ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
-    _phase1Fade = CurvedAnimation(parent: _phase1Ctrl, curve: Curves.easeIn);
-    _phase2Fade = CurvedAnimation(parent: _phase2Ctrl, curve: Curves.easeIn);
-    _runSequence();
+      duration: const Duration(milliseconds: 500),
+    )..forward();
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
+    _boot();
   }
 
-  Future<void> _runSequence() async {
-    // Phase 1: logo + "أي شيء" + "بس.. مو أي مطعم"
-    await _phase1Ctrl.forward();
-    await Future.delayed(const Duration(milliseconds: 1500));
-
-    // Cross-fade into phase 2
-    _phase1Ctrl.reverse();
-    await _phase2Ctrl.forward();
-
-    // Phase 2: "عش تجربة المكان قبل زيارته"
-    await Future.delayed(const Duration(milliseconds: 1200));
-
-    if (!mounted) return;
+  Future<void> _boot() async {
+    // Session is available synchronously once Supabase.initialize() has run.
     final session = Supabase.instance.client.auth.currentSession;
-    final nextScreen =
-        session != null ? const HomeScreen() : const WelcomeScreen();
+
+    // Warm-start the home feed IN PARALLEL with the splash so the data is
+    // (close to) ready by the time we navigate — not fetched only afterwards.
+    if (session != null) {
+      HomeScreen.prefetchFeed();
+    }
+
+    // Keep the splash visible for at most ~1s, then navigate.
+    await Future.delayed(const Duration(milliseconds: 900));
+    if (!mounted) return;
+
+    final next = session != null ? const HomeScreen() : const WelcomeScreen();
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) => nextScreen,
-        transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+        pageBuilder: (_, __, ___) => next,
+        transitionsBuilder: (_, animation, __, child) =>
             FadeTransition(opacity: animation, child: child),
-        transitionDuration: const Duration(milliseconds: 500),
+        transitionDuration: const Duration(milliseconds: 400),
       ),
     );
   }
 
   @override
   void dispose() {
-    _phase1Ctrl.dispose();
-    _phase2Ctrl.dispose();
+    _ctrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    // Single fade-in screen (merged from the old two phases).
     return Scaffold(
       backgroundColor: const Color(0xFF0F1923),
-      body: AnimatedBuilder(
-        animation: Listenable.merge([_phase1Ctrl, _phase2Ctrl]),
-        builder: (context, child) => Stack(
-          fit: StackFit.expand,
-          children: [
-            // ── Phase 1: logo + أي شيء + بس.. مو أي مطعم ──────────────────
-            FadeTransition(
-              opacity: _phase1Fade,
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.asset(
-                      'assets/images/logo.png',
-                      width: 96,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const SizedBox.shrink(),
-                    ),
-                    const SizedBox(height: 22),
-                    const Text(
-                      'أي شيء',
-                      textDirection: TextDirection.rtl,
-                      style: TextStyle(
-                        fontFamily: 'Tajawal',
-                        fontSize: 42,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'بس.. مو أي مطعم',
-                      textDirection: TextDirection.rtl,
-                      style: TextStyle(
-                        fontFamily: 'Tajawal',
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFFF26500),
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                  ],
+      body: FadeTransition(
+        opacity: _fade,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Image.asset(
+                'assets/images/logo.png',
+                width: 96,
+                errorBuilder: (context, error, stackTrace) =>
+                    const SizedBox.shrink(),
+              ),
+              const SizedBox(height: 22),
+              const Text(
+                'أي شيء',
+                textDirection: TextDirection.rtl,
+                style: TextStyle(
+                  fontFamily: 'Tajawal',
+                  fontSize: 42,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  decoration: TextDecoration.none,
                 ),
               ),
-            ),
-
-            // ── Phase 2: عش تجربة المكان قبل زيارته ───────────────────────
-            FadeTransition(
-              opacity: _phase2Fade,
-              child: const Center(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 40),
-                  child: Text(
-                    'عش تجربة المكان قبل زيارته',
-                    textAlign: TextAlign.center,
-                    textDirection: TextDirection.rtl,
-                    style: TextStyle(
-                      fontFamily: 'Tajawal',
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                      decoration: TextDecoration.none,
-                    ),
+              const SizedBox(height: 8),
+              const Text(
+                'بس.. مو أي مطعم',
+                textDirection: TextDirection.rtl,
+                style: TextStyle(
+                  fontFamily: 'Tajawal',
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFF26500),
+                  decoration: TextDecoration.none,
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 40),
+                child: Text(
+                  'عش تجربة المكان قبل زيارته',
+                  textAlign: TextAlign.center,
+                  textDirection: TextDirection.rtl,
+                  style: TextStyle(
+                    fontFamily: 'Tajawal',
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white70,
+                    decoration: TextDecoration.none,
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

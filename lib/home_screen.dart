@@ -5,12 +5,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'add_experience_screen.dart';
+import 'add_experience_screen.dart' deferred as add_exp;
 import 'app_locale.dart';
 import 'l10n/app_strings.dart';
 import 'experience_detail_screen.dart';
-import 'notifications_screen.dart';
-import 'profile_screen.dart';
+import 'notifications_screen.dart' deferred as notif;
+import 'profile_screen.dart' deferred as profile;
 import 'search_screen.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -32,6 +32,10 @@ const _kSaudiCities = [
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
+  /// Warm-starts the feed network request (called from SplashScreen so it runs
+  /// in parallel with the splash). Forwards to the State's static prefetch.
+  static void prefetchFeed() => _HomeScreenState.prefetchFeed();
+
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -48,6 +52,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final _profileRefreshNotifier = ValueNotifier<int>(0);
 
   String? _pressedCardId;
+  // Deferred-library readiness for the lazily-loaded tabs.
+  bool _notifReady = false;
+  bool _profileReady = false;
   bool _shouldAnimateList = true;
   int _page = 0;
   bool _hasMore = true;
@@ -93,7 +100,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     ]).animate(_notifPulseCtrl);
     _scrollController.addListener(_onScroll);
     AppLocale.notifier.addListener(_onLocaleChange);
-    _loadCity().then((_) => _loadData());
+    // Fire independent initial work in parallel — _loadCity only feeds a
+    // client-side filter, so the feed query no longer waits on it.
+    _loadCity();
+    _loadData();
     _subscribeRealtime();
     _checkUnread();
     _subscribeNotifRealtime();
@@ -201,6 +211,53 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       'restaurant:restaurants(id, name_ar, city, category), '
       'user:users!experiences_user_id_fkey(display_name, avatar_url)';
 
+  // ── Warm-start prefetch (kicked off by SplashScreen) ────────────────────────
+  static Future<List<Map<String, dynamic>>>? _prefetchFuture;
+
+  /// Begins loading the first page of the feed. Called from SplashScreen so the
+  /// network request runs in parallel with the splash animation instead of only
+  /// after the user reaches the home screen.
+  static void prefetchFeed() {
+    _prefetchFuture ??= _fetchFeed(0);
+  }
+
+  /// Fetches one page of experiences, then merges per-experience like counts.
+  /// Static so it can run without a mounted State (during the splash).
+  static Future<List<Map<String, dynamic>>> _fetchFeed(int page) async {
+    final from = page * _kPageSize;
+    final res = await Supabase.instance.client
+        .from('experiences')
+        .select(_kSelectFields)
+        .order('created_at', ascending: false)
+        .range(from, from + _kPageSize - 1);
+
+    final list = List<Map<String, dynamic>>.from(res);
+    if (list.isNotEmpty) {
+      // likes depends on the experience ids, so it stays a second round-trip.
+      try {
+        final expIds = list.map((e) => e['id'].toString()).toList();
+        final allLikes = await Supabase.instance.client
+            .from('likes')
+            .select('experience_id')
+            .inFilter('experience_id', expIds);
+        final counts = <String, int>{};
+        for (final l in allLikes as List) {
+          final id = l['experience_id'].toString();
+          counts[id] = (counts[id] ?? 0) + 1;
+        }
+        for (int i = 0; i < list.length; i++) {
+          list[i]['likes_count'] = counts[list[i]['id'].toString()] ?? 0;
+        }
+      } catch (e) {
+        debugPrint('Likes count error: $e');
+        for (int i = 0; i < list.length; i++) {
+          list[i]['likes_count'] = 0;
+        }
+      }
+    }
+    return list;
+  }
+
   Future<void> _loadData({bool loadMore = false}) async {
     if (loadMore) {
       if (!_hasMore || _loadingMore || _loading) return;
@@ -209,36 +266,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       setState(() { _loading = true; _page = 0; _hasMore = true; });
     }
     try {
-      final from = _page * _kPageSize;
-      final res = await Supabase.instance.client
-          .from('experiences')
-          .select(_kSelectFields)
-          .order('created_at', ascending: false)
-          .range(from, from + _kPageSize - 1);
-
-      final list = List<Map<String, dynamic>>.from(res);
-
-      if (list.isNotEmpty) {
-        try {
-          final expIds = list.map((e) => e['id'].toString()).toList();
-          final allLikes = await Supabase.instance.client
-              .from('likes')
-              .select('experience_id')
-              .inFilter('experience_id', expIds);
-          final counts = <String, int>{};
-          for (final l in allLikes as List) {
-            final id = l['experience_id'].toString();
-            counts[id] = (counts[id] ?? 0) + 1;
-          }
-          for (int i = 0; i < list.length; i++) {
-            list[i]['likes_count'] = counts[list[i]['id'].toString()] ?? 0;
-          }
-        } catch (e) {
-          debugPrint('Likes count error: $e');
-          for (int i = 0; i < list.length; i++) {
-            list[i]['likes_count'] = 0;
-          }
-        }
+      final List<Map<String, dynamic>> list;
+      if (!loadMore && _prefetchFuture != null) {
+        // Consume the prefetch begun during the splash screen (runs in parallel).
+        list = await _prefetchFuture!;
+        _prefetchFuture = null;
+      } else {
+        list = await _fetchFeed(_page);
       }
 
       if (mounted) {
@@ -452,6 +486,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
+  // Switches bottom-nav tabs, lazily loading deferred tab libraries on first
+  // visit so their code isn't in the initial main.dart.js payload.
+  Future<void> _selectTab(int i) async {
+    if (i == 3 && !_notifReady) {
+      await notif.loadLibrary();
+      if (mounted) setState(() => _notifReady = true);
+    } else if (i == 4 && !_profileReady) {
+      await profile.loadLibrary();
+      if (mounted) setState(() => _profileReady = true);
+    }
+    if (!mounted) return;
+    setState(() {
+      _currentIndex = i;
+      if (i == 3) _unreadCount = 0;
+    });
+    if (i == 4) _profileRefreshNotifier.value++;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -565,10 +617,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               const SearchScreen(),
               // 2 — Add button slot
               const SizedBox(),
-              // 3 — Notifications
-              const NotificationsScreen(),
-              // 4 — Profile
-              ProfileScreen(refreshNotifier: _profileRefreshNotifier),
+              // 3 — Notifications (deferred lib; built after first visit)
+              _notifReady ? notif.NotificationsScreen() : const SizedBox(),
+              // 4 — Profile (deferred lib; built after first visit)
+              _profileReady
+                  ? profile.ProfileScreen(refreshNotifier: _profileRefreshNotifier)
+                  : const SizedBox(),
             ],
           ),
 
@@ -706,7 +760,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           const SizedBox(height: 26),
           GestureDetector(
             onTap: () async {
-              await Navigator.of(context).push(_fadeSlideRoute(const AddExperienceScreen()));
+              await add_exp.loadLibrary();
+              if (!mounted) return;
+              await Navigator.of(context).push(_fadeSlideRoute(add_exp.AddExperienceScreen()));
               _loadData();
             },
             child: Container(
@@ -1199,7 +1255,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 return Expanded(
                   child: GestureDetector(
                     onTap: () async {
-                      await Navigator.of(context).push(_fadeSlideRoute(const AddExperienceScreen()));
+                      await add_exp.loadLibrary();
+                      if (!mounted) return;
+                      await Navigator.of(context).push(_fadeSlideRoute(add_exp.AddExperienceScreen()));
                       _loadData();
                     },
                     child: Center(
@@ -1219,13 +1277,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               final active = _currentIndex == i;
               return Expanded(
                 child: GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _currentIndex = i;
-                      if (i == 3) _unreadCount = 0;
-                    });
-                    if (i == 4) _profileRefreshNotifier.value++;
-                  },
+                  onTap: () => _selectTab(i),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
