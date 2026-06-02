@@ -1,43 +1,94 @@
+﻿import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'edit_profile_screen.dart';
+import 'experience_detail_screen.dart';
+import 'settings_screen.dart';
+import 'user_profile_screen.dart';
+import 'l10n/app_strings.dart';
+
+// ── Design tokens (match home & detail screens)
+const _kDark    = Color(0xFF0F1923);
+const _kDark2   = Color(0xFF1A2340);
+const _kOrange  = Color(0xFFF26500);
+const _kGold    = Color(0xFFC8931A);
+const _kCardBg  = Color(0xFF1E2D45);
+const _kTextSec = Color(0xFF94A3B8);
+
+TextStyle _tj(double size,
+    {FontWeight weight = FontWeight.w400,
+    Color color = Colors.white,
+    double? height}) =>
+    GoogleFonts.tajawal(fontSize: size, fontWeight: weight, color: color, height: height);
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  final ValueNotifier<int>? refreshNotifier;
+  const ProfileScreen({super.key, this.refreshNotifier});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
 class _ProfileScreenState extends State<ProfileScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
+  // Static cache — survives tab switches without re-fetching
+  static Map<String, dynamic>? _cachedProfile;
+  static List<Map<String, dynamic>> _cachedExperiences = [];
+  static List<Map<String, dynamic>> _cachedSaved = [];
+
   late TabController _tabController;
+  late AnimationController _statsAnim;
+  late Animation<double> _statsProgress;
   Map<String, dynamic>? _profile;
   List<Map<String, dynamic>> _experiences = [];
   List<Map<String, dynamic>> _saved = [];
   bool _loading = true;
-  int _tabIndex = 0;
+  int _avatarVersion = 0;
+  int _followersCount = 0;
+  int _followingCount = 0;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _tabController.addListener(() => setState(() => _tabIndex = _tabController.index));
-    _loadProfile();
+    _tabController.addListener(() => setState(() {}));
+    _statsAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
+    _statsProgress = CurvedAnimation(parent: _statsAnim, curve: Curves.easeOutCubic);
+    widget.refreshNotifier?.addListener(_onRefreshTriggered);
+    _loadFollowCounts();
+    // Show cached data instantly, then refresh in background
+    if (_cachedProfile != null) {
+      _profile      = _cachedProfile;
+      _experiences  = _cachedExperiences;
+      _saved        = _cachedSaved;
+      _loading      = false;
+      _loadProfile(silent: true);
+    } else {
+      _loadProfile();
+    }
+  }
+
+  void _onRefreshTriggered() {
+    if (mounted) _loadProfile(silent: true);
   }
 
   @override
   void dispose() {
+    widget.refreshNotifier?.removeListener(_onRefreshTriggered);
+    _statsAnim.dispose();
     _tabController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadProfile() async {
-    setState(() => _loading = true);
+  Future<void> _loadProfile({bool silent = false}) async {
+    if (!silent) setState(() => _loading = true);
     try {
       final user = Supabase.instance.client.auth.currentUser;
       if (user == null) return;
-debugPrint('Current user id: ${user.id}');
-debugPrint('Current user email: ${user.email}');
 
       final profile = await Supabase.instance.client
           .from('users')
@@ -47,30 +98,140 @@ debugPrint('Current user email: ${user.email}');
 
       final experiences = await Supabase.instance.client
           .from('experiences')
-          .select('*, restaurant:restaurants(*)')
+          .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, avatar_url)')
           .eq('user_id', user.id)
           .order('created_at', ascending: false);
 
       final savedRes = await Supabase.instance.client
-    .from('saves')
-    .select('*, experience:experiences(*, restaurant:restaurants(*))')
-    .eq('user_id', user.id);
+          .from('saves')
+          .select('*, experience:experiences(*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, avatar_url))')
+          .eq('user_id', user.id);
 
+      final expList   = List<Map<String, dynamic>>.from(experiences);
+      final savedList = List<Map<String, dynamic>>.from(savedRes);
+      // Update static cache
+      _cachedProfile     = profile;
+      _cachedExperiences = expList;
+      _cachedSaved       = savedList;
       setState(() {
-        _profile = profile;
-        _experiences = List<Map<String, dynamic>>.from(experiences);
-        _saved = List<Map<String, dynamic>>.from(savedRes);
-        _loading = false;
+        _profile     = profile;
+        _experiences = expList;
+        _saved       = savedList;
+        _loading     = false;
+        _avatarVersion++;
       });
+      await _loadFollowCounts();
+      if (!silent) _statsAnim.forward(from: 0);
     } catch (e) {
       debugPrint('Profile error: $e');
       setState(() => _loading = false);
     }
   }
 
-  Future<void> _signOut() async {
-    await Supabase.instance.client.auth.signOut();
-    if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+  Future<void> _loadFollowCounts() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    try {
+      final followersRes = await Supabase.instance.client
+          .from('follows')
+          .select('follower_id')
+          .eq('following_id', user.id);
+      final followingRes = await Supabase.instance.client
+          .from('follows')
+          .select('following_id')
+          .eq('follower_id', user.id);
+      if (mounted) {
+        setState(() {
+          _followersCount = (followersRes as List).length;
+          _followingCount = (followingRes as List).length;
+        });
+        debugPrint('Follow counts — followers: $_followersCount, following: $_followingCount');
+      }
+    } catch (e) {
+      debugPrint('Follow counts error: $e');
+    }
+  }
+
+  Future<void> _shareProfile() async {
+    final text = 'ألقِ نظرة على تجاربي 👀\nhttps://aishay-app.vercel.app';
+    try {
+      await Share.share(text);
+    } catch (e) {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('تم نسخ الرابط',
+                style: GoogleFonts.tajawal(color: Colors.white)),
+            backgroundColor: const Color(0xFFF26500),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _openEditProfile() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => EditProfileScreen(profile: _profile ?? {})),
+    );
+    if (result == true && mounted) {
+      _loadProfile(silent: true);
+    }
+  }
+
+  Future<void> _openExperienceDetail(Map<String, dynamic> exp) async {
+    await Navigator.push(
+      context,
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 300),
+        pageBuilder: (_, __, ___) => ExperienceDetailScreen(
+          experience: exp,
+          onClose: () => Navigator.pop(context),
+        ),
+        transitionsBuilder: (_, animation, __, child) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(begin: const Offset(0, 0.03), end: Offset.zero)
+                .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+            child: child,
+          ),
+        ),
+      ),
+    );
+    if (mounted) _loadProfile();
+  }
+
+  Future<void> _openSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SettingsScreen(profile: _profile),
+      ),
+    );
+    if (mounted) _loadProfile(silent: true);
+  }
+
+  Future<void> _showFollowList({required bool isFollowers}) async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: _kDark2,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _FollowListSheet(
+        title: isFollowers ? AppStrings.followers : AppStrings.following,
+        userId: user.id,
+        currentUserId: user.id,
+        isFollowers: isFollowers,
+        onRefreshCounts: _loadFollowCounts,
+      ),
+    );
+    if (mounted) _loadFollowCounts();
   }
 
   double _avgRating(Map<String, dynamic> exp) {
@@ -80,17 +241,13 @@ debugPrint('Current user email: ${user.email}');
     return vals.reduce((a, b) => a + b) / vals.length;
   }
 
-  String _stars(double r) {
-    final full = r.round();
-    return '${'★' * full}${'☆' * (5 - full)}';
-  }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        backgroundColor: Color(0xFFFAF5EE),
-        body: Center(child: CircularProgressIndicator(color: Color(0xFFF26500))),
+      return Scaffold(
+        backgroundColor: _kDark,
+        body: const Center(child: CircularProgressIndicator(color: _kOrange)),
       );
     }
 
@@ -100,7 +257,6 @@ debugPrint('Current user email: ${user.email}');
     final city = _profile?['city'] ?? '';
     final avatar = _profile?['avatar_url'];
 
-    // إحصائيات
     final expCount = _experiences.length;
     final restaurants = _experiences.map((e) => e['restaurant_id']).toSet().length;
     final cities = _experiences
@@ -108,116 +264,145 @@ debugPrint('Current user email: ${user.email}');
         .where((c) => c != null && c.toString().isNotEmpty)
         .toSet()
         .length;
-    final totalLikes = _experiences.fold<int>(0, (sum, e) => sum + ((e['likes_count'] as int?) ?? 0));
 
     return Scaffold(
-      backgroundColor: const Color(0xFFFAF5EE),
+      backgroundColor: _kDark,
       body: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverToBoxAdapter(
             child: Column(
               children: [
-                // HEADER
+                // ── CINEMATIC HEADER
                 Container(
-                  color: const Color(0xFF1A2340),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0xFF1F2E4A), _kDark],
+                    ),
+                  ),
                   padding: EdgeInsets.only(
-                    top: MediaQuery.of(context).padding.top + 12,
-                    bottom: 20,
+                    top: MediaQuery.of(context).padding.top + 14,
+                    bottom: 26,
                     left: 16,
                     right: 16,
                   ),
                   child: Column(
                     children: [
-                      // Top row
+                      // Top bar
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text('حسابي',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Colors.white)),
+                          Text('حسابي', style: _tj(20, weight: FontWeight.w900)),
                           Row(
                             children: [
-                              _iconBtn(Icons.share_outlined, () {}),
+                              _iconBtn(PhosphorIcons.shareNetwork(), _shareProfile),
                               const SizedBox(width: 8),
-                              _iconBtn(Icons.logout_rounded, _signOut),
+                              _iconBtn(PhosphorIcons.gear(), _openSettings),
                             ],
                           ),
                         ],
                       ),
 
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 26),
 
-                      // Avatar + info
-                      Row(
-                        children: [
-                          // Avatar
-                          Container(
-                            width: 72, height: 72,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: const Color(0xFFF26500), width: 2.5),
-                              color: const Color(0xFF243058),
-                            ),
-                            child: avatar != null
-                                ? ClipOval(child: Image.network(avatar, fit: BoxFit.cover))
-                                : Center(
-                                    child: Text(
-                                      displayName.isNotEmpty ? displayName[0].toUpperCase() : 'م',
-                                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Color(0xFFF26500)),
-                                    ),
-                                  ),
-                          ),
-
-                          const SizedBox(width: 16),
-
-                          // Name + bio
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(displayName,
-                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Colors.white)),
-                                if (username.isNotEmpty) ...[
-                                  const SizedBox(height: 2),
-                                  Text('@$username',
-                                      style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
-                                ],
-                                if (city.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    children: [
-                                      const Icon(Icons.location_on_outlined, color: Color(0xFF94A3B8), size: 12),
-                                      const SizedBox(width: 3),
-                                      Text(city, style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8))),
-                                    ],
+                      // Centered avatar + info
+                      Center(
+                        child: Column(
+                          children: [
+                            // Avatar with orange glow
+                            Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: _kOrange.withValues(alpha: 0.35),
+                                    blurRadius: 22,
+                                    spreadRadius: 2,
                                   ),
                                 ],
-                                if (bio.isNotEmpty) ...[
-                                  const SizedBox(height: 6),
-                                  Text(bio,
-                                      style: const TextStyle(fontSize: 11, color: Color(0xFFCBD5E1), height: 1.5),
-                                      maxLines: 2, overflow: TextOverflow.ellipsis),
-                                ],
-                              ],
+                              ),
+                              child: Container(
+                                width: 86, height: 86,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: _kOrange, width: 2.5),
+                                  color: _kDark2,
+                                ),
+                                child: avatar != null
+                                    ? ClipOval(
+                                        child: CachedNetworkImage(
+                                          imageUrl: '$avatar?v=$_avatarVersion',
+                                          fit: BoxFit.cover,
+                                          placeholder: (_, __) => const ColoredBox(color: _kDark2),
+                                          errorWidget: (_, __, ___) => Center(
+                                            child: Text(
+                                              displayName.isNotEmpty ? displayName[0].toUpperCase() : 'م',
+                                              style: _tj(34, weight: FontWeight.w900, color: _kOrange),
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                    : Center(
+                                        child: Text(
+                                          displayName.isNotEmpty ? displayName[0].toUpperCase() : 'م',
+                                          style: _tj(34, weight: FontWeight.w900, color: _kOrange),
+                                        ),
+                                      ),
+                              ),
                             ),
-                          ),
-                        ],
+
+                            const SizedBox(height: 14),
+
+                            Text(displayName, style: _tj(19, weight: FontWeight.w900)),
+
+                            if (username.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Text('@$username', style: _tj(12, color: _kTextSec)),
+                            ],
+
+                            if (city.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill), color: _kTextSec, size: 13),
+                                  const SizedBox(width: 3),
+                                  Text(city, style: _tj(11, color: _kTextSec)),
+                                ],
+                              ),
+                            ],
+
+                            if (bio.isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              Text(
+                                bio,
+                                style: _tj(12, color: const Color(0xFFCBD5E1), height: 1.7),
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
 
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 20),
 
-                      // تعديل الملف
+                      // Edit profile button
                       GestureDetector(
-                        onTap: () {},
+                        onTap: _openEditProfile,
                         child: Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                           decoration: BoxDecoration(
-                            border: Border.all(color: Colors.white.withOpacity(0.3)),
-                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                            borderRadius: BorderRadius.circular(12),
+                            color: Colors.white.withValues(alpha: 0.05),
                           ),
-                          child: const Center(
-                            child: Text('✏️ تعديل الملف الشخصي',
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+                          child: Center(
+                            child: Text(AppStrings.editProfile,
+                                style: _tj(13, weight: FontWeight.w700)),
                           ),
                         ),
                       ),
@@ -225,43 +410,64 @@ debugPrint('Current user email: ${user.email}');
                   ),
                 ),
 
-                // STATS
+                // ── STATS ROW
                 Container(
-                  color: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  child: Row(
+                  color: _kDark2,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  child: Column(
                     children: [
-                      _stat('$expCount', 'تجربة'),
-                      _divider(),
-                      _stat('$restaurants', 'مطعم'),
-                      _divider(),
-                      _stat('$cities', 'مدينة'),
-                      _divider(),
-                      _stat('$totalLikes', '🔥 يستاهل'),
+                      // Social stats row
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _stat(_followersCount, AppStrings.followers,
+                              onTap: () => _showFollowList(isFollowers: true),
+                              animated: false),
+                          _divider(),
+                          _stat(_followingCount, AppStrings.following,
+                              onTap: () => _showFollowList(isFollowers: false),
+                              animated: false),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Container(height: 0.5, color: Colors.white.withValues(alpha: 0.07)),
+                      const SizedBox(height: 10),
+                      // Content stats row
+                      Row(
+                        children: [
+                          _stat(expCount, AppStrings.experiences),
+                          _divider(),
+                          _stat(restaurants, AppStrings.restaurants),
+                          _divider(),
+                          _stat(cities, AppStrings.cities),
+                        ],
+                      ),
                     ],
                   ),
                 ),
 
-                const SizedBox(height: 8),
+                const SizedBox(height: 2),
               ],
             ),
           ),
 
-          // TABS
+          // ── PINNED TABS
           SliverPersistentHeader(
             pinned: true,
             delegate: _TabDelegate(
               TabBar(
                 controller: _tabController,
-                indicatorColor: const Color(0xFFF26500),
-                indicatorWeight: 2.5,
-                labelColor: const Color(0xFFF26500),
-                unselectedLabelColor: const Color(0xFF94A3B8),
-                labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
-                tabs: const [
-                  Tab(text: '🍽️ تجاربي'),
-                  Tab(text: '📍 أود زيارته'),
-                  Tab(text: '📊 إحصائيات'),
+                indicatorColor: _kOrange,
+                indicatorWeight: 3,
+                indicatorSize: TabBarIndicatorSize.label,
+                labelColor: _kOrange,
+                unselectedLabelColor: _kTextSec,
+                labelStyle: GoogleFonts.tajawal(fontSize: 12, fontWeight: FontWeight.w800),
+                unselectedLabelStyle: GoogleFonts.tajawal(fontSize: 12, fontWeight: FontWeight.w600),
+                tabs: [
+                  Tab(text: AppStrings.myExperiences),
+                  Tab(text: AppStrings.saved),
+                  Tab(text: AppStrings.statistics),
                 ],
               ),
             ),
@@ -282,17 +488,15 @@ debugPrint('Current user email: ${user.email}');
 
   Widget _buildExperiences() {
     if (_experiences.isEmpty) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('🍽️', style: TextStyle(fontSize: 48)),
-            SizedBox(height: 12),
-            Text('لا توجد تجارب بعد',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E))),
-            SizedBox(height: 6),
-            Text('شارك أول تجربة لك!',
-                style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
+            Icon(PhosphorIcons.forkKnife(), size: 52, color: _kTextSec.withValues(alpha: 0.4)),
+            const SizedBox(height: 14),
+            Text('لا توجد تجارب بعد', style: _tj(14, weight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text('شارك أول تجربة لك!', style: _tj(12, color: _kTextSec)),
           ],
         ),
       );
@@ -308,65 +512,85 @@ debugPrint('Current user email: ${user.email}');
         final photos = exp['photos'] as List? ?? [];
         final rating = _avgRating(exp);
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2))],
-          ),
-          child: Row(
-            children: [
-              // صورة
-              ClipRRect(
-                borderRadius: const BorderRadius.horizontal(right: Radius.circular(14)),
-                child: SizedBox(
-                  width: 90, height: 90,
-                  child: photos.isNotEmpty
-                      ? Image.network(photos[0], fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _placeholderSmall())
-                      : _placeholderSmall(),
+        return GestureDetector(
+          onTap: () => _openExperienceDetail(exp),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(
+              color: _kCardBg,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
                 ),
-              ),
-
-              // معلومات
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(restName,
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF1A1A2E))),
-                      if (city.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text('📍 $city', style: const TextStyle(fontSize: 10, color: Color(0xFF7A6655))),
-                      ],
-                      if (rating > 0) ...[
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Text(_stars(rating), style: const TextStyle(fontSize: 11, color: Color(0xFFC8931A))),
-                            const SizedBox(width: 4),
-                            Text(rating.toStringAsFixed(1),
-                                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E))),
-                          ],
-                        ),
-                      ],
-                      if (exp['description'] != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          exp['description'].toString().length > 60
-                              ? '${exp['description'].toString().substring(0, 60)}...'
-                              : exp['description'].toString(),
-                          style: const TextStyle(fontSize: 10, color: Color(0xFF7A6655), height: 1.4),
-                        ),
-                      ],
-                    ],
+              ],
+            ),
+            child: Row(
+              children: [
+                // Photo
+                ClipRRect(
+                  borderRadius: const BorderRadius.horizontal(right: Radius.circular(16)),
+                  child: SizedBox(
+                    width: 96, height: 96,
+                    child: photos.isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: photos[0].toString(),
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => const ColoredBox(color: _kDark2),
+                            errorWidget: (_, __, ___) => _placeholderSmall(),
+                          )
+                        : _placeholderSmall(),
                   ),
                 ),
-              ),
-            ],
+
+                // Info
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(restName, style: _tj(13, weight: FontWeight.w900)),
+                        if (city.isNotEmpty) ...[
+                          const SizedBox(height: 3),
+                          Text(city, style: _tj(10, color: _kTextSec)),
+                        ],
+                        if (rating > 0) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: _kGold.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('★', style: TextStyle(fontSize: 11, color: _kGold)),
+                                const SizedBox(width: 3),
+                                Text(rating.toStringAsFixed(1),
+                                    style: _tj(11, weight: FontWeight.w800, color: _kGold)),
+                              ],
+                            ),
+                          ),
+                        ],
+                        if (exp['description'] != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            exp['description'].toString().length > 65
+                                ? '${exp['description'].toString().substring(0, 65)}...'
+                                : exp['description'].toString(),
+                            style: _tj(10, color: _kTextSec, height: 1.55),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -375,17 +599,15 @@ debugPrint('Current user email: ${user.email}');
 
   Widget _buildSaved() {
     if (_saved.isEmpty) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('📍', style: TextStyle(fontSize: 48)),
-            SizedBox(height: 12),
-            Text('لا توجد مطاعم محفوظة',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E))),
-            SizedBox(height: 6),
-            Text('اضغط أود زيارته في أي تجربة',
-                style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
+            Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill), size: 52, color: _kTextSec.withValues(alpha: 0.4)),
+            const SizedBox(height: 14),
+            Text('لا توجد مطاعم محفوظة', style: _tj(14, weight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text('اضغط أود زيارته في أي تجربة', style: _tj(12, color: _kTextSec)),
           ],
         ),
       );
@@ -400,41 +622,54 @@ debugPrint('Current user email: ${user.email}');
         final restName = exp['restaurant']?['name_ar'] ?? 'مطعم';
         final photos = exp['photos'] as List? ?? [];
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8)],
-          ),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: const BorderRadius.horizontal(right: Radius.circular(14)),
-                child: SizedBox(
-                  width: 90, height: 90,
-                  child: photos.isNotEmpty
-                      ? Image.network(photos[0], fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _placeholderSmall())
-                      : _placeholderSmall(),
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(restName,
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF1A1A2E))),
-                      const SizedBox(height: 4),
-                      const Text('📍 أود زيارته',
-                          style: TextStyle(fontSize: 10, color: Color(0xFFF26500), fontWeight: FontWeight.w700)),
-                    ],
+        return GestureDetector(
+          onTap: () => _openExperienceDetail(exp),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(
+              color: _kCardBg,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 10)],
+            ),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.horizontal(right: Radius.circular(16)),
+                  child: SizedBox(
+                    width: 96, height: 96,
+                    child: photos.isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: photos[0].toString(),
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => const ColoredBox(color: _kDark2),
+                            errorWidget: (_, __, ___) => _placeholderSmall(),
+                          )
+                        : _placeholderSmall(),
                   ),
                 ),
-              ),
-            ],
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(restName, style: _tj(13, weight: FontWeight.w900)),
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _kOrange.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(AppStrings.wantToVisit,
+                              style: _tj(10, weight: FontWeight.w700, color: _kOrange)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -443,19 +678,17 @@ debugPrint('Current user email: ${user.email}');
 
   Widget _buildStats() {
     if (_experiences.isEmpty) {
-      return const Center(
-        child: Text('لا توجد بيانات كافية',
-            style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8))),
+      return Center(
+        child: Text('لا توجد بيانات كافية', style: _tj(13, color: _kTextSec)),
       );
     }
 
-    // حساب متوسط كل تقييم
     final ratingFields = [
-      ['🍽️ الطعام', 'rating_food'],
-      ['🤝 الخدمة', 'rating_service'],
-      ['🌅 الأجواء', 'rating_ambiance'],
-      ['✨ النظافة', 'rating_clean'],
-      ['💰 القيمة', 'rating_value'],
+      ['الطعام', 'rating_food'],
+      ['الخدمة', 'rating_service'],
+      ['الأجواء', 'rating_ambiance'],
+      ['النظافة', 'rating_clean'],
+      ['القيمة', 'rating_value'],
     ];
 
     return SingleChildScrollView(
@@ -463,20 +696,19 @@ debugPrint('Current user email: ${user.email}');
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // متوسط التقييمات
+          // Rating averages
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8)],
+              color: _kCardBg,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 10)],
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('⭐ متوسط تقييماتك',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E))),
-                const SizedBox(height: 16),
+                Text('متوسط تقييماتك', style: _tj(13, weight: FontWeight.w800)),
+                const SizedBox(height: 18),
                 ...ratingFields.map((r) {
                   final vals = _experiences
                       .map((e) => (e[r[1]] as num?)?.toDouble() ?? 0.0)
@@ -485,25 +717,41 @@ debugPrint('Current user email: ${user.email}');
                   if (vals.isEmpty) return const SizedBox();
                   final avg = vals.reduce((a, b) => a + b) / vals.length;
                   return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.only(bottom: 14),
                     child: Row(
                       children: [
-                        SizedBox(width: 90,
-                            child: Text(r[0], style: const TextStyle(fontSize: 11, color: Color(0xFF7A6655)))),
+                        SizedBox(
+                          width: 90,
+                          child: Text(r[0], style: _tj(11, color: _kTextSec)),
+                        ),
                         Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: avg / 5,
-                              backgroundColor: const Color(0xFFE4D9CE),
-                              valueColor: const AlwaysStoppedAnimation(Color(0xFFC8931A)),
-                              minHeight: 8,
-                            ),
+                          child: Stack(
+                            children: [
+                              Container(
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                              ),
+                              FractionallySizedBox(
+                                widthFactor: avg / 5,
+                                child: Container(
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    gradient: const LinearGradient(
+                                      colors: [Color(0xFFB8860B), Color(0xFFF5C542)],
+                                    ),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 10),
                         Text(avg.toStringAsFixed(1),
-                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E))),
+                            style: _tj(11, weight: FontWeight.w800, color: _kGold)),
                       ],
                     ),
                   );
@@ -512,24 +760,25 @@ debugPrint('Current user email: ${user.email}');
             ),
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
 
-          // ملخص
+          // Summary
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: const Color(0xFF1A2340),
-              borderRadius: BorderRadius.circular(16),
+              color: _kDark2,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('📊 ملخصك',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white)),
-                const SizedBox(height: 12),
+                Text('ملخصك', style: _tj(13, weight: FontWeight.w800)),
+                const SizedBox(height: 14),
                 _summaryRow('إجمالي التجارب', '${_experiences.length} تجربة'),
-                _summaryRow('مطاعم مختلفة', '${_experiences.map((e) => e['restaurant_id']).toSet().length} مطعم'),
-                _summaryRow('أعلى تقييم أعطيته', '5.0 ⭐'),
+                _summaryRow('مطاعم مختلفة',
+                    '${_experiences.map((e) => e['restaurant_id']).toSet().length} مطعم'),
+                _summaryRow('أعلى تقييم أعطيته', '5.0'),
               ],
             ),
           ),
@@ -539,37 +788,71 @@ debugPrint('Current user email: ${user.email}');
   }
 
   Widget _summaryRow(String label, String value) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
+    padding: const EdgeInsets.only(bottom: 12),
     child: Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
-        Text(value, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white)),
+        Text(label, style: _tj(11, color: _kTextSec)),
+        Text(value, style: _tj(11, weight: FontWeight.w800, color: _kGold)),
       ],
     ),
   );
 
-  Widget _stat(String value, String label) => Expanded(
-    child: Column(
-      children: [
-        Text(value,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFF1A1A2E))),
-        const SizedBox(height: 2),
-        Text(label,
-            style: const TextStyle(fontSize: 9, color: Color(0xFF94A3B8), fontWeight: FontWeight.w600)),
-      ],
+  Widget _stat(num rawValue, String label, {VoidCallback? onTap, bool animated = true}) => Expanded(
+    child: GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          if (animated)
+            AnimatedBuilder(
+              animation: _statsProgress,
+              builder: (_, __) {
+                final display = _statsProgress.isCompleted
+                    ? rawValue.round()
+                    : (rawValue * _statsProgress.value).round();
+                return Text(
+                  '$display',
+                  style: _tj(20, weight: FontWeight.w900, color: _kOrange),
+                );
+              },
+            )
+          else
+            Text(
+              '${rawValue.round()}',
+              style: _tj(20, weight: FontWeight.w900, color: _kOrange),
+            ),
+          const SizedBox(height: 3),
+          Text(label,
+              style: _tj(10,
+                  weight: FontWeight.w600,
+                  color: onTap != null ? Colors.white70 : _kTextSec)),
+          if (onTap != null) ...[
+            const SizedBox(height: 2),
+            Container(
+              width: 16, height: 1.5,
+              decoration: BoxDecoration(
+                color: _kOrange.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(1),
+              ),
+            ),
+          ],
+        ],
+      ),
     ),
   );
 
-  Widget _divider() => Container(width: 1, height: 30, color: const Color(0xFFE4D9CE));
+  Widget _divider() => Container(
+    width: 1, height: 36,
+    color: Colors.white.withValues(alpha: 0.1),
+  );
 
   Widget _iconBtn(IconData icon, VoidCallback onTap) => GestureDetector(
     onTap: onTap,
     child: Container(
-      width: 36, height: 36,
+      width: 38, height: 38,
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(10),
+        color: Colors.white.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Icon(icon, color: Colors.white, size: 18),
     ),
@@ -577,9 +860,9 @@ debugPrint('Current user email: ${user.email}');
 
   Widget _placeholderSmall() => Container(
     decoration: const BoxDecoration(
-      gradient: LinearGradient(colors: [Color(0xFF1A2340), Color(0xFF2A3A5C)]),
+      gradient: LinearGradient(colors: [_kDark2, _kCardBg]),
     ),
-    child: const Center(child: Text('🍽️', style: TextStyle(fontSize: 24))),
+    child: Center(child: Icon(PhosphorIcons.forkKnife(), size: 24, color: _kTextSec.withValues(alpha: 0.4))),
   );
 }
 
@@ -590,7 +873,7 @@ class _TabDelegate extends SliverPersistentHeaderDelegate {
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
     return Container(
-      color: Colors.white,
+      color: _kDark,
       child: tabBar,
     );
   }
@@ -601,4 +884,270 @@ class _TabDelegate extends SliverPersistentHeaderDelegate {
   double get minExtent => tabBar.preferredSize.height;
   @override
   bool shouldRebuild(covariant SliverPersistentHeaderDelegate oldDelegate) => false;
+}
+
+// ── Followers / Following bottom-sheet ────────────────────────────────────────
+
+class _FollowListSheet extends StatefulWidget {
+  final String title;
+  final String userId;
+  final String currentUserId;
+  final bool isFollowers;
+  final VoidCallback? onRefreshCounts;
+
+  const _FollowListSheet({
+    required this.title,
+    required this.userId,
+    required this.currentUserId,
+    required this.isFollowers,
+    this.onRefreshCounts,
+  });
+
+  @override
+  State<_FollowListSheet> createState() => _FollowListSheetState();
+}
+
+class _FollowListSheetState extends State<_FollowListSheet> {
+  List<Map<String, dynamic>> _users = [];
+  Set<String> _myFollowing = {};
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final List<String> userIds;
+      if (widget.isFollowers) {
+        final res = await Supabase.instance.client
+            .from('follows')
+            .select('follower_id')
+            .eq('following_id', widget.userId);
+        userIds = (res as List).map((r) => r['follower_id'].toString()).toList();
+      } else {
+        final res = await Supabase.instance.client
+            .from('follows')
+            .select('following_id')
+            .eq('follower_id', widget.userId);
+        userIds = (res as List).map((r) => r['following_id'].toString()).toList();
+      }
+
+      if (userIds.isEmpty) {
+        if (mounted) setState(() { _users = []; _loading = false; });
+        return;
+      }
+
+      final usersRes = await Supabase.instance.client
+          .from('users')
+          .select('id, display_name, username, avatar_url')
+          .inFilter('id', userIds);
+
+      final followingRes = await Supabase.instance.client
+          .from('follows')
+          .select('following_id')
+          .eq('follower_id', widget.currentUserId)
+          .inFilter('following_id', userIds);
+
+      if (mounted) {
+        setState(() {
+          _users = List<Map<String, dynamic>>.from(usersRes);
+          _myFollowing = (followingRes as List)
+              .map((r) => r['following_id'].toString())
+              .toSet();
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _toggleFollow(String targetId) async {
+    final wasFollowing = _myFollowing.contains(targetId);
+    setState(() {
+      if (wasFollowing) {
+        _myFollowing.remove(targetId);
+      } else {
+        _myFollowing.add(targetId);
+      }
+    });
+    try {
+      if (!wasFollowing) {
+        await Supabase.instance.client.from('follows').upsert({
+          'follower_id': widget.currentUserId,
+          'following_id': targetId,
+        }, onConflict: 'follower_id,following_id');
+      } else {
+        await Supabase.instance.client
+            .from('follows')
+            .delete()
+            .eq('follower_id', widget.currentUserId)
+            .eq('following_id', targetId);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          if (wasFollowing) {
+            _myFollowing.add(targetId);
+          } else {
+            _myFollowing.remove(targetId);
+          }
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      minChildSize: 0.35,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (_, controller) => Column(
+        children: [
+          const SizedBox(height: 8),
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(widget.title, style: _tj(16, weight: FontWeight.w900)),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: const Icon(Icons.close_rounded,
+                      color: Colors.white54, size: 20),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(height: 0.5, color: Colors.white.withValues(alpha: 0.08)),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator(color: _kOrange))
+                : _users.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.people_outline_rounded,
+                                color: _kTextSec, size: 42),
+                            const SizedBox(height: 12),
+                            Text('لا يوجد بعد',
+                                style: _tj(13, color: _kTextSec)),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: controller,
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+                        itemCount: _users.length,
+                        itemBuilder: (_, i) => _buildUserItem(_users[i]),
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUserItem(Map<String, dynamic> u) {
+    final uid = u['id'].toString();
+    final name = u['display_name'] as String? ?? 'مستخدم';
+    final username = u['username'] as String? ?? '';
+    final avatar = u['avatar_url'] as String?;
+    final isMe = uid == widget.currentUserId;
+    final following = _myFollowing.contains(uid);
+
+    return GestureDetector(
+      onTap: () async {
+        final nav = Navigator.of(context);
+        nav.pop();
+        await nav.push(
+          MaterialPageRoute(builder: (_) => UserProfileScreen(userId: uid)),
+        );
+        widget.onRefreshCounts?.call();
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            Container(
+              width: 46, height: 46,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _kDark,
+                border: Border.all(color: _kOrange, width: 1.5),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: avatar != null
+                  ? CachedNetworkImage(
+                      imageUrl: avatar,
+                      fit: BoxFit.cover,
+                      placeholder: (_, __) => const ColoredBox(color: _kDark),
+                      errorWidget: (_, __, ___) => _initial(name),
+                    )
+                  : _initial(name),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, style: _tj(13, weight: FontWeight.w700)),
+                  if (username.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text('@$username', style: _tj(11, color: _kTextSec)),
+                  ],
+                ],
+              ),
+            ),
+            if (!isMe)
+              GestureDetector(
+                onTap: () => _toggleFollow(uid),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: following
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : _kOrange,
+                    borderRadius: BorderRadius.circular(18),
+                    border: following
+                        ? Border.all(
+                            color: Colors.white.withValues(alpha: 0.25))
+                        : null,
+                  ),
+                  child: Text(
+                    following ? 'تتابعه' : '+ متابعة',
+                    style: _tj(11, weight: FontWeight.w700),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _initial(String name) => Center(
+        child: Text(
+          name.isNotEmpty ? name[0] : 'م',
+          style: _tj(16, weight: FontWeight.w900, color: _kOrange),
+        ),
+      );
 }

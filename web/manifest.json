@@ -1,12 +1,12 @@
 {
-    "name": "aishay_app",
-    "short_name": "aishay_app",
-    "start_url": ".",
+    "name": "أي شيء",
+    "short_name": "أي شيء",
+    "description": "بس مو أي مطعم",
+    "start_url": "/",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#0F1923",
+    "theme_color": "#F26500",
+    "orientation": "portrait",
     "prefer_related_applications": false,
     "icons": [
         {

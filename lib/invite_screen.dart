@@ -48,6 +48,7 @@ class _InviteScreenState extends State<InviteScreen>
 
   Future<void> _checkCode() async {
     final code = _codeController.text.trim().toUpperCase();
+    debugPrint('[invite] _checkCode tapped, code="$code"');
     if (code.isEmpty) {
       setState(() => _error = 'أدخل رمز الدعوة');
       _shakeCtrl.forward(from: 0);
@@ -60,17 +61,22 @@ class _InviteScreenState extends State<InviteScreen>
     });
 
     try {
+      debugPrint('[invite] querying invitation_codes for "$code"...');
       final res = await Supabase.instance.client
           .from('invitation_codes')
           .select()
           .eq('code', code)
           .eq('is_used', false)
           .maybeSingle();
+      debugPrint('[invite] query returned: $res');
 
+      if (!mounted) return;
       if (res == null) {
+        debugPrint('[invite] code invalid or already used');
         setState(() => _error = 'الرمز غير صحيح أو مستخدم مسبقاً');
         _shakeCtrl.forward(from: 0);
       } else {
+        debugPrint('[invite] code valid → navigating to RegisterScreen');
         setState(() => _success = true);
         await Future.delayed(const Duration(milliseconds: 800));
         if (mounted) {
@@ -85,25 +91,56 @@ class _InviteScreenState extends State<InviteScreen>
           );
         }
       }
-    } catch (e) {
-      setState(() => _error = e.toString());
+    } catch (e, st) {
+      // Surface the real failure (visible in Safari Web Inspector for the PWA).
+      debugPrint('[invite] ERROR checking code: $e');
+      debugPrint('$st');
+      if (mounted) setState(() => _error = 'تعذّر التحقق من الرمز: $e');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // Allow popping back to the Welcome screen (defensive; the route is pushed
+    // on top of Welcome, so it is already poppable).
+    return PopScope(
+      canPop: true,
+      child: Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: const Color(0xFF1A2340),
       body: SafeArea(
         child: FadeTransition(
           opacity: _fade,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: EdgeInsets.only(
+              left: 24,
+              right: 24,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+            ),
             child: Column(
               children: [
-                const SizedBox(height: 60),
+                const SizedBox(height: 12),
+                // Back button → returns to the Welcome screen.
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.arrow_back_ios_new,
+                          color: Colors.white, size: 16),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
                 Image.asset('assets/images/logo.png', width: 100),
                 const SizedBox(height: 16),
                 const Text(
@@ -120,14 +157,15 @@ class _InviteScreenState extends State<InviteScreen>
                   width: 72,
                   height: 72,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.08),
+                    color: Colors.white.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: const Color(0xFFF26500).withOpacity(0.4),
+                      color: const Color(0xFFF26500).withValues(alpha: 0.4),
                     ),
                   ),
                   child: const Center(
-                    child: Text('🎟️', style: TextStyle(fontSize: 32)),
+                    child: Icon(Icons.confirmation_number_outlined,
+                        color: Color(0xFFF26500), size: 34),
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -167,17 +205,17 @@ class _InviteScreenState extends State<InviteScreen>
                   child: Container(
                     decoration: BoxDecoration(
                       color: _success
-                          ? const Color(0xFF065F46).withOpacity(0.15)
+                          ? const Color(0xFF065F46).withValues(alpha: 0.15)
                           : _error != null
-                              ? const Color(0xFF991B1B).withOpacity(0.1)
-                              : Colors.white.withOpacity(0.07),
+                              ? const Color(0xFF991B1B).withValues(alpha: 0.1)
+                              : Colors.white.withValues(alpha: 0.07),
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: _success
-                            ? const Color(0xFF34D399).withOpacity(0.6)
+                            ? const Color(0xFF34D399).withValues(alpha: 0.6)
                             : _error != null
-                                ? const Color(0xFFFCA5A5).withOpacity(0.6)
-                                : Colors.white.withOpacity(0.12),
+                                ? const Color(0xFFFCA5A5).withValues(alpha: 0.6)
+                                : Colors.white.withValues(alpha: 0.12),
                       ),
                     ),
                     child: TextField(
@@ -195,7 +233,7 @@ class _InviteScreenState extends State<InviteScreen>
                       decoration: InputDecoration(
                         hintText: 'AISHAY-XXXX',
                         hintStyle: TextStyle(
-                          color: Colors.white.withOpacity(0.25),
+                          color: Colors.white.withValues(alpha: 0.25),
                           fontSize: 14,
                           letterSpacing: 2,
                         ),
@@ -251,11 +289,11 @@ class _InviteScreenState extends State<InviteScreen>
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF065F46).withOpacity(0.15),
+                      color: const Color(0xFF065F46).withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                           color:
-                              const Color(0xFF34D399).withOpacity(0.5)),
+                              const Color(0xFF34D399).withValues(alpha: 0.5)),
                     ),
                     child: const Row(
                       children: [
@@ -279,7 +317,7 @@ class _InviteScreenState extends State<InviteScreen>
                   success: _success,
                   onTap: _checkCode,
                 ),
-                const Spacer(),
+                const SizedBox(height: 32),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 24),
                   child: RichText(
@@ -312,11 +350,12 @@ class _InviteScreenState extends State<InviteScreen>
           ),
         ),
       ),
+      ),
     );
   }
 }
 
-class _CheckButton extends StatefulWidget {
+class _CheckButton extends StatelessWidget {
   final bool loading;
   final bool success;
   final VoidCallback onTap;
@@ -328,89 +367,53 @@ class _CheckButton extends StatefulWidget {
   });
 
   @override
-  State<_CheckButton> createState() => _CheckButtonState();
-}
-
-class _CheckButtonState extends State<_CheckButton>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 120),
-      lowerBound: 0.95,
-      upperBound: 1.0,
-      value: 1.0,
-    );
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => _ctrl.reverse(),
-      onTapUp: (_) {
-        _ctrl.forward();
-        widget.onTap();
-      },
-      onTapCancel: () => _ctrl.forward(),
-      child: ScaleTransition(
-        scale: _ctrl,
-        child: Container(
-          width: double.infinity,
-          height: 54,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: widget.success
-                  ? [
-                      const Color(0xFF065F46),
-                      const Color(0xFF34D399)
-                    ]
-                  : [
-                      const Color(0xFFF26500),
-                      const Color(0xFFFF7A1A)
-                    ],
-            ),
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [
-              BoxShadow(
-                color: (widget.success
-                        ? const Color(0xFF34D399)
-                        : const Color(0xFFF26500))
-                    .withOpacity(0.4),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
+    return SizedBox(
+      width: double.infinity,
+      height: 54,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: loading ? null : onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Ink(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: success
+                    ? [const Color(0xFF065F46), const Color(0xFF34D399)]
+                    : [const Color(0xFFF26500), const Color(0xFFFF7A1A)],
               ),
-            ],
-          ),
-          child: Center(
-            child: widget.loading
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2.5,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                  color: (success
+                          ? const Color(0xFF34D399)
+                          : const Color(0xFFF26500))
+                      .withValues(alpha: 0.4),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Center(
+              child: loading
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : Text(
+                      success ? '✓ رمز صحيح' : 'تحقق من الرمز ←',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
                     ),
-                  )
-                : Text(
-                    widget.success
-                        ? '✓ رمز صحيح'
-                        : 'تحقق من الرمز ←',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                    ),
-                  ),
+            ),
           ),
         ),
       ),

@@ -1,7 +1,29 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
+import 'security_utils.dart';
+import 'l10n/app_strings.dart';
+
+const _kSaudiCitiesAdd = [
+  'الرياض', 'جدة', 'مكة', 'المدينة',
+  'الدمام', 'الخبر', 'الطائف', 'أبها', 'تبوك', 'القصيم',
+];
+
+// ── Design tokens
+const _kDark2   = Color(0xFF1A2340);
+const _kOrange  = Color(0xFFF26500);
+const _kGold    = Color(0xFFC8931A);
+const _kCardBg  = Color(0xFF1E2D45);
+const _kTextSec = Color(0xFF94A3B8);
+
+TextStyle _tj(double size,
+    {FontWeight weight = FontWeight.w400,
+    Color color = Colors.white,
+    double? height}) =>
+    GoogleFonts.tajawal(fontSize: size, fontWeight: weight, color: color, height: height);
 
 class AddExperienceScreen extends StatefulWidget {
   const AddExperienceScreen({super.key});
@@ -20,6 +42,7 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
 
   // Controllers
   final _restController = TextEditingController();
+  final _titleController = TextEditingController();
   final _descController = TextEditingController();
   final _dishNameCtrl = TextEditingController();
   final _dishPriceCtrl = TextEditingController();
@@ -31,12 +54,14 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
 
   // Ratings
   final List<double> _ratings = [0, 0, 0, 0, 0];
-  final _ratingLabels = [
-    '🍽️ الطعام',
-    '🤝 الخدمة',
-    '🌅 الأجواء',
-    '✨ النظافة',
-    '💰 القيمة'
+  // Display-only labels (the numeric ratings are what get stored). Getter so it
+  // re-localizes on language toggle instead of caching at construction.
+  List<String> get _ratingLabels => [
+    AppStrings.food,
+    AppStrings.service,
+    AppStrings.ambiance,
+    AppStrings.cleanliness,
+    AppStrings.value,
   ];
 
   // Atmosphere & Price
@@ -51,19 +76,28 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
     '🌿 للدراسة',
     '🌳 خارجي',
     '🕯️ رومانسي',
-    '👥 شبابي'
+    '👥 شبابي',
   ];
 
+  // Visit time
+  String _visitTime = '';
+
   // Dishes
-  final List<Map<String, String>> _dishes = [];
-List<String> _selectedCategories = [];
-bool _showOtherCategory = false;
-final _otherCategoryCtrl = TextEditingController();
+  final List<Map<String, dynamic>> _dishes = [];
+  List<String> _selectedCategories = [];
+  bool _showOtherCategory = false;
+  final _otherCategoryCtrl = TextEditingController();
 
   // Restaurant
   String? _restaurantId;
   String? _restaurantName;
+  String _restaurantCity = '';
   List<Map<String, dynamic>> _searchResults = [];
+
+  // Dish photos
+  Uint8List? _pendingDishPhoto;
+  String? _pendingDishPhotoUrl;
+  bool _dishPhotoUploading = false;
 
   // Animation
   late AnimationController _slideCtrl;
@@ -84,14 +118,15 @@ final _otherCategoryCtrl = TextEditingController();
 
   @override
   void dispose() {
-  _slideCtrl.dispose();
-  _restController.dispose();
-  _descController.dispose();
-  _dishNameCtrl.dispose();
-  _dishPriceCtrl.dispose();
-  _otherCategoryCtrl.dispose();
-  super.dispose();
-}
+    _slideCtrl.dispose();
+    _restController.dispose();
+    _titleController.dispose();
+    _descController.dispose();
+    _dishNameCtrl.dispose();
+    _dishPriceCtrl.dispose();
+    _otherCategoryCtrl.dispose();
+    super.dispose();
+  }
 
   double get _avgRating {
     final filled = _ratings.where((r) => r > 0).toList();
@@ -143,13 +178,44 @@ final _otherCategoryCtrl = TextEditingController();
     });
   }
 
+  // Title must be at most 6 words (whitespace-separated).
+  int _titleWordCount(String title) =>
+      title.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+  bool _isTitleValid(String title) => _titleWordCount(title) <= 6;
+
   Future<void> _submit() async {
     if (_restaurantName == null || _restaurantName!.isEmpty) {
-      setState(() => _error = 'أدخل اسم المطعم');
+      setState(() => _error = AppStrings.enterRestaurantName);
       return;
     }
-    if (_descController.text.trim().isEmpty) {
-      setState(() => _error = 'أدخل وصف التجربة');
+
+    // Sanitize + length-validate text inputs (defense-in-depth; the DB is the
+    // authoritative gate — see supabase/security/rls_and_storage.sql).
+    final title = sanitizeInput(_titleController.text);
+    final desc = sanitizeInput(_descController.text);
+
+    if (title.isEmpty) {
+      setState(() => _error = AppStrings.enterTitle);
+      return;
+    }
+    if (desc.isEmpty) {
+      setState(() => _error = AppStrings.enterDescription);
+      return;
+    }
+    if (title.length > kMaxTitleLength) {
+      setState(() => _error = AppStrings.titleTooLong(kMaxTitleLength));
+      return;
+    }
+    if (!_isTitleValid(title)) {
+      setState(() => _error = AppStrings.titleMaxWords);
+      return;
+    }
+    if (desc.length > kMaxDescriptionLength) {
+      setState(() => _error = AppStrings.descTooLong(kMaxDescriptionLength));
+      return;
+    }
+    if (containsProfanity(title) || containsProfanity(desc)) {
+      setState(() => _error = AppStrings.inappropriateContent);
       return;
     }
 
@@ -164,7 +230,13 @@ final _otherCategoryCtrl = TextEditingController();
       if (_restaurantId == null) {
         final rest = await Supabase.instance.client
             .from('restaurants')
-            .insert({'name_ar': _restaurantName, 'created_by': user.id})
+            .insert({
+              'name_ar': _restaurantName,
+              'created_by': user.id,
+              if (_selectedCategories.isNotEmpty)
+                'category': _selectedCategories.join(','),
+              if (_restaurantCity.isNotEmpty) 'city': _restaurantCity,
+            })
             .select()
             .single();
         _restaurantId = rest['id'];
@@ -175,7 +247,8 @@ final _otherCategoryCtrl = TextEditingController();
           .insert({
             'user_id': user.id,
             'restaurant_id': _restaurantId,
-            'description': _descController.text.trim(),
+            'title': title,
+            'description': desc,
             'rating_food': _ratings[0] > 0 ? _ratings[0] : null,
             'rating_service': _ratings[1] > 0 ? _ratings[1] : null,
             'rating_ambiance': _ratings[2] > 0 ? _ratings[2] : null,
@@ -183,6 +256,8 @@ final _otherCategoryCtrl = TextEditingController();
             'rating_value': _ratings[4] > 0 ? _ratings[4] : null,
             'atmosphere': _atmosphere.isNotEmpty ? _atmosphere : null,
             'price_range': _priceRange.isNotEmpty ? _priceRange : null,
+            'visit_time': _visitTime.isNotEmpty ? _visitTime : null,
+            if (_tags.isNotEmpty) 'tags': _tags,
           })
           .select()
           .single();
@@ -199,8 +274,9 @@ final _otherCategoryCtrl = TextEditingController();
         await Supabase.instance.client.from('dishes').insert(
           _dishes.map((d) => {
             'experience_id': exp['id'],
-            'name': d['name'],
-            'price_sar': double.tryParse(d['price'] ?? '0'),
+            'name': sanitizeAndCap((d['name'] as String?) ?? '', kMaxDishNameLength),
+            'price_sar': double.tryParse((d['price'] as String?) ?? '0'),
+            'photo_url': d['photo_url'],
           }).toList(),
         );
       }
@@ -216,7 +292,7 @@ final _otherCategoryCtrl = TextEditingController();
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A2340),
+      backgroundColor: _kDark2,
       body: SafeArea(
         child: Column(
           children: [
@@ -244,7 +320,7 @@ final _otherCategoryCtrl = TextEditingController();
 
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
         children: [
           GestureDetector(
@@ -252,29 +328,34 @@ final _otherCategoryCtrl = TextEditingController();
                 ? setState(() => _step--)
                 : Navigator.pop(context),
             child: Container(
-              width: 36, height: 36,
+              width: 38, height: 38,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
+                color: Colors.white.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
               ),
-              child: const Icon(Icons.arrow_back_ios_new,
-                  color: Colors.white, size: 16),
+              child: Icon(PhosphorIcons.caretRight(), color: Colors.white, size: 16),
             ),
           ),
           const SizedBox(width: 12),
           Text(
-            _step == 99 ? 'تم النشر 🎉'
-                : _step == 1 ? 'الصور والمطعم'
-                : _step == 2 ? 'التقييمات'
-                : _step == 3 ? 'الأجواء والسعر'
-                : 'الأطباق والوصف',
-            style: const TextStyle(
-              fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white),
+            _step == 99 ? AppStrings.published
+                : _step == 1 ? AppStrings.stepPhotosRestaurant
+                : _step == 2 ? AppStrings.ratings
+                : _step == 3 ? AppStrings.stepAtmospherePrice
+                : AppStrings.stepDishesDescription,
+            style: _tj(15, weight: FontWeight.w800),
           ),
           const Spacer(),
           if (_step < 99)
-            Text('$_step / 4',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: _kOrange.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text('$_step / 4',
+                  style: _tj(11, weight: FontWeight.w700, color: _kOrange)),
+            ),
         ],
       ),
     );
@@ -282,15 +363,15 @@ final _otherCategoryCtrl = TextEditingController();
 
   Widget _buildProgressBar() {
     return Container(
-      height: 3,
-      color: Colors.white.withOpacity(0.1),
+      height: 5,
+      color: Colors.white.withValues(alpha: 0.07),
       child: FractionallySizedBox(
         alignment: Alignment.centerRight,
         widthFactor: _step / 4,
         child: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Color(0xFFF26500), Color(0xFFFF7A1A)],
+              colors: [Color(0xFFF26500), Color(0xFFFF8C33)],
             ),
           ),
         ),
@@ -298,296 +379,566 @@ final _otherCategoryCtrl = TextEditingController();
     );
   }
 
-  // ── STEP 1: الصور والمطعم
-  Widget _buildStep1() {
-  return Column(
-    children: [
-      Expanded(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _label('📷 الصور'),
-              const SizedBox(height: 10),
-              SizedBox(
-                height: 90,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  children: [
-                    GestureDetector(
-                      onTap: _pickImages,
-                      child: Container(
-                        width: 80, height: 80,
-                        margin: const EdgeInsets.only(left: 8),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: const Color(0xFFF26500), width: 1.5),
-                          borderRadius: BorderRadius.circular(12),
-                          color: const Color(0xFFF26500).withOpacity(0.1),
-                        ),
-                        child: const Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.add_photo_alternate_outlined,
-                                color: Color(0xFFF26500), size: 26),
-                            SizedBox(height: 4),
-                            Text('أضف صورة',
-                                style: TextStyle(color: Color(0xFFF26500),
-                                    fontSize: 8, fontWeight: FontWeight.w700)),
-                          ],
-                        ),
+  // ── City picker sheet
+  void _showCityPickerSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kDark2,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 12),
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(children: [
+              Text(AppStrings.chooseCity, style: _tj(16, weight: FontWeight.w900)),
+            ]),
+          ),
+          const SizedBox(height: 12),
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+              itemCount: _kSaudiCitiesAdd.length,
+              itemBuilder: (_, i) {
+                final city = _kSaudiCitiesAdd[i];
+                final selected = _restaurantCity == city;
+                return GestureDetector(
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() => _restaurantCity = city);
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                    decoration: BoxDecoration(
+                      color: selected ? _kOrange.withValues(alpha: 0.15) : _kCardBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: selected ? _kOrange : Colors.white.withValues(alpha: 0.06),
                       ),
                     ),
-                    ..._imageBytes.map((bytes) => Stack(
+                    child: Row(
                       children: [
-                        Container(
-                          width: 80, height: 80,
+                        Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                            color: selected ? _kOrange : _kTextSec, size: 16),
+                        const SizedBox(width: 10),
+                        Text(city,
+                            style: _tj(13,
+                                weight: selected ? FontWeight.w700 : FontWeight.w500,
+                                color: selected ? _kOrange : Colors.white)),
+                        if (selected) ...[
+                          const Spacer(),
+                          Icon(Icons.check_rounded, color: _kOrange, size: 16),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Dish photo pickers
+  Future<ImageSource?> _showDishPhotoSourceDialog() => showModalBottomSheet<ImageSource>(
+    context: context,
+    backgroundColor: _kCardBg,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 8),
+        ListTile(
+          leading: Icon(PhosphorIcons.camera(), color: _kOrange),
+          title: Text(AppStrings.camera, style: _tj(13)),
+          onTap: () => Navigator.pop(ctx, ImageSource.camera),
+        ),
+        ListTile(
+          leading: Icon(PhosphorIcons.images(), color: _kOrange),
+          title: Text(AppStrings.gallery, style: _tj(13)),
+          onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+        ),
+        const SizedBox(height: 8),
+      ],
+    ),
+  );
+
+  Future<void> _pickDishPhotoForPending() async {
+    final source = await _showDishPhotoSourceDialog();
+    if (source == null) return;
+    final photo = await _picker.pickImage(source: source, imageQuality: 70);
+    if (photo == null) return;
+    final bytes = await photo.readAsBytes();
+    setState(() {
+      _pendingDishPhoto = bytes;
+      _pendingDishPhotoUrl = null;
+      _dishPhotoUploading = true;
+    });
+    try {
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final path = 'dishes/${ts}_${_dishes.length}.jpg';
+      await Supabase.instance.client.storage
+          .from('photos')
+          .uploadBinary(path, bytes);
+      final url = Supabase.instance.client.storage
+          .from('photos')
+          .getPublicUrl(path);
+      if (mounted) setState(() => _pendingDishPhotoUrl = url);
+    } catch (e) {
+      debugPrint('Dish photo upload error: $e');
+    } finally {
+      if (mounted) setState(() => _dishPhotoUploading = false);
+    }
+  }
+
+  Future<void> _pickDishPhotoForIndex(int index) async {
+    final source = await _showDishPhotoSourceDialog();
+    if (source == null) return;
+    final photo = await _picker.pickImage(source: source, imageQuality: 70);
+    if (photo == null) return;
+    final bytes = await photo.readAsBytes();
+    // Show local preview immediately
+    setState(() => _dishes[index]['preview_bytes'] = bytes);
+    try {
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final path = 'dishes/${ts}_$index.jpg';
+      await Supabase.instance.client.storage
+          .from('photos')
+          .uploadBinary(path, bytes);
+      final url = Supabase.instance.client.storage
+          .from('photos')
+          .getPublicUrl(path);
+      if (mounted) {
+        setState(() {
+          _dishes[index]['photo_url'] = url;
+          _dishes[index].remove('preview_bytes');
+        });
+      }
+    } catch (e) {
+      debugPrint('Dish photo upload error: $e');
+      if (mounted) setState(() => _dishes[index].remove('preview_bytes'));
+    }
+  }
+
+  // ── STEP 1: الصور والمطعم
+  Widget _buildStep1() {
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _label(AppStrings.photos),
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 92,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      GestureDetector(
+                        onTap: _pickImages,
+                        child: Container(
+                          width: 82, height: 82,
                           margin: const EdgeInsets.only(left: 8),
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            image: DecorationImage(
-                              image: MemoryImage(bytes), fit: BoxFit.cover),
+                            border: Border.all(color: _kOrange, width: 1.5),
+                            borderRadius: BorderRadius.circular(14),
+                            color: _kOrange.withValues(alpha: 0.1),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(PhosphorIcons.image(),
+                                  color: _kOrange, size: 26),
+                              const SizedBox(height: 4),
+                              Text(AppStrings.addPhoto,
+                                  style: _tj(8, weight: FontWeight.w700, color: _kOrange)),
+                            ],
                           ),
                         ),
-                        Positioned(
-                          top: 2, left: 10,
-                          child: GestureDetector(
-                            onTap: () => setState(() => _imageBytes.remove(bytes)),
-                            child: Container(
-                              width: 18, height: 18,
-                              decoration: const BoxDecoration(
-                                  color: Colors.black54, shape: BoxShape.circle),
-                              child: const Icon(Icons.close, color: Colors.white, size: 12),
+                      ),
+                      ..._imageBytes.map((bytes) => Stack(
+                        children: [
+                          Container(
+                            width: 82, height: 82,
+                            margin: const EdgeInsets.only(left: 8),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(14),
+                              image: DecorationImage(
+                                  image: MemoryImage(bytes), fit: BoxFit.cover),
                             ),
                           ),
-                        ),
-                      ],
-                    )),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 20),
-              _label('🍽️ اسم المطعم *'),
-              const SizedBox(height: 8),
-              _input(
-                controller: _restController,
-                hint: 'ابحث أو أدخل اسم المطعم',
-                onChanged: (v) {
-                  setState(() {
-                    _restaurantName = v;
-                    _restaurantId = null;
-                  });
-                  _searchRestaurant(v);
-                },
-              ),
-
-              if (_searchResults.isNotEmpty)
-                Container(
-                  margin: const EdgeInsets.only(top: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF243058),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  child: Column(
-                    children: _searchResults.map((r) => ListTile(
-                      dense: true,
-                      title: Text(r['name_ar'] ?? '',
-                          style: const TextStyle(color: Colors.white, fontSize: 12)),
-                      subtitle: Text(r['city'] ?? '',
-                          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
-                      onTap: () {
-                        setState(() {
-                          _restaurantId = r['id'];
-                          _restaurantName = r['name_ar'];
-                          _restController.text = r['name_ar'];
-                          _searchResults = [];
-                        });
-                      },
-                    )).toList(),
-                  ),
-                ),
-
-              if (_restaurantId != null)
-                Container(
-                  margin: const EdgeInsets.only(top: 8),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF065F46).withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: const Color(0xFF34D399).withOpacity(0.4)),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.check_circle_outline, color: Color(0xFF34D399), size: 16),
-                      SizedBox(width: 8),
-                      Text('تم ربط المطعم ✓',
-                          style: TextStyle(color: Color(0xFF34D399),
-                              fontSize: 11, fontWeight: FontWeight.w700)),
+                          Positioned(
+                            top: 2, left: 10,
+                            child: GestureDetector(
+                              onTap: () => setState(() => _imageBytes.remove(bytes)),
+                              child: Container(
+                                width: 20, height: 20,
+                                decoration: const BoxDecoration(
+                                    color: Colors.black54, shape: BoxShape.circle),
+                                child: const Icon(Icons.close, color: Colors.white, size: 12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      )),
                     ],
                   ),
                 ),
 
-              const SizedBox(height: 20),
-              _label('🏷️ تصنيف المطعم'),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  '☕ كافيه',
-                  '🥩 مشويات',
-                  '🍣 سوشي',
-                  '🍔 برغر',
-                  '🥗 صحي',
-                  '🍕 بيتزا',
-                  '🍜 مطبخ آسيوي',
-                  '🍗 دجاج',
-                  '🥪 ساندويتش',
-                  '🍚 رز',
-                  '🥩 لحم',
-                ].map((cat) {
-                  final active = _selectedCategories.contains(cat);
-                  return GestureDetector(
-                    onTap: () => setState(() =>
-                        active ? _selectedCategories.remove(cat) : _selectedCategories.add(cat)),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: active
-                            ? const Color(0xFFF26500).withOpacity(0.15)
-                            : Colors.white.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: active
-                              ? const Color(0xFFF26500).withOpacity(0.5)
-                              : Colors.white.withOpacity(0.1),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (active)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 4),
-                              child: Icon(Icons.check, color: Color(0xFFF26500), size: 12),
-                            ),
-                          Text(cat,
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: active
-                                      ? const Color(0xFFF26500)
-                                      : const Color(0xFF94A3B8))),
-                        ],
-                      ),
-                    ),
-                  );
-                }).toList()
-                  ..add(GestureDetector(
-                    onTap: () => setState(() => _showOtherCategory = !_showOtherCategory),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: _showOtherCategory
-                            ? const Color(0xFFF26500).withOpacity(0.15)
-                            : Colors.white.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: _showOtherCategory
-                              ? const Color(0xFFF26500).withOpacity(0.5)
-                              : Colors.white.withOpacity(0.1),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_showOtherCategory)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 4),
-                              child: Icon(Icons.check, color: Color(0xFFF26500), size: 12),
-                            ),
-                          Text('✏️ تصنيف آخر',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: _showOtherCategory
-                                      ? const Color(0xFFF26500)
-                                      : const Color(0xFF94A3B8))),
-                        ],
-                      ),
-                    ),
-                  )),
-              ),
-
-              if (_showOtherCategory) ...[
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(child: _input(controller: _otherCategoryCtrl, hint: 'اكتب التصنيف...')),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () {
-                        final val = _otherCategoryCtrl.text.trim();
-                        if (val.isNotEmpty && !_selectedCategories.contains(val)) {
-                          setState(() {
-                            _selectedCategories.add(val);
-                            _otherCategoryCtrl.clear();
-                          });
-                        }
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF26500),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(Icons.add, color: Colors.white, size: 20),
-                      ),
-                    ),
-                  ],
+                const SizedBox(height: 22),
+                _label('${AppStrings.restaurantName} *'),
+                const SizedBox(height: 8),
+                _input(
+                  controller: _restController,
+                  hint: AppStrings.searchOrEnterRestaurant,
+                  onChanged: (v) {
+                    setState(() {
+                      _restaurantName = v;
+                      _restaurantId = null;
+                    });
+                    _searchRestaurant(v);
+                  },
                 ),
-              ],
 
-              if (_selectedCategories.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: _selectedCategories.map((c) => Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                if (_searchResults.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1A2340),
-                      borderRadius: BorderRadius.circular(20),
+                      color: _kCardBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                    ),
+                    child: Column(
+                      children: _searchResults.map((r) => ListTile(
+                        dense: true,
+                        title: Text(r['name_ar'] ?? '',
+                            style: _tj(12)),
+                        subtitle: Text(r['city'] ?? '',
+                            style: _tj(10, color: _kTextSec)),
+                        onTap: () {
+                          setState(() {
+                            _restaurantId = r['id'];
+                            _restaurantName = r['name_ar'];
+                            _restController.text = r['name_ar'];
+                            _searchResults = [];
+                          });
+                        },
+                      )).toList(),
+                    ),
+                  ),
+
+                if (_restaurantId != null)
+                  Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF065F46).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF34D399).withValues(alpha: 0.4)),
                     ),
                     child: Row(
-                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(c, style: const TextStyle(color: Colors.white, fontSize: 10)),
-                        const SizedBox(width: 6),
-                        GestureDetector(
-                          onTap: () => setState(() => _selectedCategories.remove(c)),
-                          child: const Icon(Icons.close, color: Colors.white54, size: 12),
-                        ),
+                        const Icon(Icons.check_circle_outline,
+                            color: Color(0xFF34D399), size: 16),
+                        const SizedBox(width: 8),
+                        Text(AppStrings.restaurantLinked,
+                            style: _tj(11, weight: FontWeight.w700,
+                                color: const Color(0xFF34D399))),
                       ],
                     ),
-                  )).toList(),
-                ),
-              ],
+                  ),
 
-              if (_error != null) ...[
+                const SizedBox(height: 22),
+                _label('⏱️ ${AppStrings.visitTime}'),
                 const SizedBox(height: 10),
-                _errorBox(_error!),
+                SizedBox(
+                  height: 38,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: AppStrings.visitTimeOptions.map((time) {
+                      final active = _visitTime == time;
+                      return GestureDetector(
+                        onTap: () => setState(() => _visitTime = active ? '' : time),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          margin: const EdgeInsets.only(left: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: active ? _kOrange : Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: active ? _kOrange : Colors.white.withValues(alpha: 0.12),
+                            ),
+                          ),
+                          child: Text(
+                            AppStrings.localizeVisitTime(time),
+                            style: _tj(12,
+                                weight: active ? FontWeight.w700 : FontWeight.w500,
+                                color: active ? Colors.white : _kTextSec),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+
+                const SizedBox(height: 22),
+                _label('✏️ ${AppStrings.experienceTitle} *'),
+                const SizedBox(height: 8),
+                _input(
+                  controller: _titleController,
+                  hint: AppStrings.titleHintExample,
+                  maxLength: 80,
+                ),
+                // Live word counter + over-limit error (max 6 words).
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _titleController,
+                  builder: (_, value, __) {
+                    final count = _titleWordCount(value.text);
+                    final over = count > 6;
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 6, right: 4, left: 4),
+                      child: Row(
+                        children: [
+                          if (over)
+                            Expanded(
+                              child: Text(
+                                AppStrings.titleMaxWords,
+                                style: _tj(11, color: Colors.redAccent),
+                              ),
+                            )
+                          else
+                            const Spacer(),
+                          Text(
+                            AppStrings.wordsCount(count),
+                            style: _tj(11,
+                                color: over ? Colors.redAccent : _kTextSec),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+
+                const SizedBox(height: 22),
+                _label('🏷️ ${AppStrings.restaurantCategory}'),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    '☕ كافيه',
+                    '🥩 مشويات',
+                    '🍣 سوشي',
+                    '🍔 برغر',
+                    '🥗 صحي',
+                    '🍕 بيتزا',
+                    '🍜 مطبخ آسيوي',
+                    '🍗 دجاج',
+                    '🥪 ساندويتش',
+                    '🍚 رز',
+                    '🥩 لحم',
+                  ].map((cat) {
+                    final active = _selectedCategories.contains(cat);
+                    return GestureDetector(
+                      onTap: () => setState(() =>
+                          active ? _selectedCategories.remove(cat) : _selectedCategories.add(cat)),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: active
+                              ? _kOrange.withValues(alpha: 0.15)
+                              : Colors.white.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: active
+                                ? _kOrange.withValues(alpha: 0.5)
+                                : Colors.white.withValues(alpha: 0.1),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (active)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 4),
+                                child: const Icon(Icons.check, color: _kOrange, size: 12),
+                              ),
+                            Text(cat,
+                                style: _tj(11, weight: FontWeight.w600,
+                                    color: active ? _kOrange : _kTextSec)),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList()
+                    ..add(GestureDetector(
+                      onTap: () => setState(() => _showOtherCategory = !_showOtherCategory),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: _showOtherCategory
+                              ? _kOrange.withValues(alpha: 0.15)
+                              : Colors.white.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: _showOtherCategory
+                                ? _kOrange.withValues(alpha: 0.5)
+                                : Colors.white.withValues(alpha: 0.1),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_showOtherCategory)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 4),
+                                child: Icon(Icons.check, color: _kOrange, size: 12),
+                              ),
+                            Text(AppStrings.otherCategory,
+                                style: _tj(11, weight: FontWeight.w600,
+                                    color: _showOtherCategory ? _kOrange : _kTextSec)),
+                          ],
+                        ),
+                      ),
+                    )),
+                ),
+
+                if (_showOtherCategory) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(child: _input(controller: _otherCategoryCtrl, hint: AppStrings.writeCategory)),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () {
+                          final val = _otherCategoryCtrl.text.trim();
+                          if (val.isNotEmpty && !_selectedCategories.contains(val)) {
+                            setState(() {
+                              _selectedCategories.add(val);
+                              _otherCategoryCtrl.clear();
+                            });
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(13),
+                          decoration: BoxDecoration(
+                            color: _kOrange,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(PhosphorIcons.plus(), color: Colors.white, size: 20),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+
+                if (_selectedCategories.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: _selectedCategories.map((c) => Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: _kCardBg,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(c, style: _tj(10)),
+                          const SizedBox(width: 6),
+                          GestureDetector(
+                            onTap: () => setState(() => _selectedCategories.remove(c)),
+                            child: const Icon(Icons.close, color: Colors.white54, size: 12),
+                          ),
+                        ],
+                      ),
+                    )).toList(),
+                  ),
+                ],
+
+                const SizedBox(height: 22),
+                _label('📍 ${AppStrings.city}'),
+                const SizedBox(height: 10),
+                GestureDetector(
+                  onTap: _showCityPickerSheet,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _restaurantCity.isNotEmpty
+                            ? _kOrange.withValues(alpha: 0.5)
+                            : Colors.white.withValues(alpha: 0.12),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                            color: _restaurantCity.isNotEmpty ? _kOrange : _kTextSec,
+                            size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _restaurantCity.isNotEmpty ? _restaurantCity : AppStrings.chooseCity,
+                            style: _tj(12,
+                                color: _restaurantCity.isNotEmpty
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.3)),
+                          ),
+                        ),
+                        Icon(Icons.keyboard_arrow_down_rounded,
+                            color: _kTextSec, size: 18),
+                      ],
+                    ),
+                  ),
+                ),
+
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  _errorBox(_error!),
+                ],
               ],
-            ],
+            ),
           ),
         ),
-      ),
-      _nextBtn('التالي ←', _nextStep),
-    ],
-  );
-}
+        _nextBtn(AppStrings.next, () {
+          if (_titleController.text.trim().isEmpty) {
+            setState(() => _error = AppStrings.enterTitle);
+            return;
+          }
+          setState(() => _error = null);
+          _nextStep();
+        }),
+      ],
+    );
+  }
+
   // ── STEP 2: التقييمات
   Widget _buildStep2() {
     return Column(
@@ -600,10 +951,10 @@ final _otherCategoryCtrl = TextEditingController();
                 ...List.generate(_ratingLabels.length, (i) {
                   return Container(
                     margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(14),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.06),
-                      borderRadius: BorderRadius.circular(14),
+                      color: _kCardBg,
+                      borderRadius: BorderRadius.circular(16),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -612,35 +963,39 @@ final _otherCategoryCtrl = TextEditingController();
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(_ratingLabels[i],
-                                style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white)),
+                                style: _tj(12, weight: FontWeight.w700)),
                             if (_ratings[i] > 0)
-                              Text('${_ratings[i].toInt()}.0',
-                                  style: const TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w800,
-                                      color: Color(0xFFC8931A))),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: _kGold.withValues(alpha: 0.18),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text('${_ratings[i].toInt()}.0',
+                                    style: _tj(11, weight: FontWeight.w800, color: _kGold)),
+                              ),
                           ],
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: List.generate(5, (j) {
+                            final active = j < _ratings[i];
                             return GestureDetector(
                               onTap: () =>
                                   setState(() => _ratings[i] = (j + 1).toDouble()),
                               child: Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 4),
-                                child: Text('★',
-                                    style: TextStyle(
-                                      fontSize: 28,
-                                      color: j < _ratings[i]
-                                          ? const Color(0xFFC8931A)
-                                          : Colors.white.withOpacity(0.2),
-                                    )),
+                                padding: const EdgeInsets.symmetric(horizontal: 5),
+                                child: AnimatedDefaultTextStyle(
+                                  duration: const Duration(milliseconds: 150),
+                                  style: TextStyle(
+                                    fontSize: active ? 34 : 30,
+                                    color: active
+                                        ? _kGold
+                                        : Colors.white.withValues(alpha: 0.2),
+                                  ),
+                                  child: const Text('★'),
+                                ),
                               ),
                             );
                           }),
@@ -652,30 +1007,26 @@ final _otherCategoryCtrl = TextEditingController();
 
                 if (_avgRating > 0)
                   Container(
-                    padding: const EdgeInsets.all(14),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF243058),
+                      color: _kGold.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: _kGold.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('التقييم الكلي',
-                            style: TextStyle(
-                                fontSize: 12, color: Color(0xFF94A3B8))),
+                        Text(AppStrings.overallRating,
+                            style: _tj(12, color: _kTextSec)),
                         Row(
                           children: [
                             Text(
                               '${'★' * _avgRating.round()}${'☆' * (5 - _avgRating.round())}',
-                              style: const TextStyle(
-                                  fontSize: 14, color: Color(0xFFF5D485)),
+                              style: const TextStyle(fontSize: 16, color: _kGold),
                             ),
-                            const SizedBox(width: 6),
+                            const SizedBox(width: 8),
                             Text(_avgRating.toStringAsFixed(1),
-                                style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w900,
-                                    color: Color(0xFFF5D485))),
+                                style: _tj(16, weight: FontWeight.w900, color: _kGold)),
                           ],
                         ),
                       ],
@@ -685,7 +1036,7 @@ final _otherCategoryCtrl = TextEditingController();
             ),
           ),
         ),
-        _nextBtn('التالي ←', _nextStep),
+        _nextBtn(AppStrings.next, _nextStep),
       ],
     );
   }
@@ -700,7 +1051,7 @@ final _otherCategoryCtrl = TextEditingController();
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _label('🌅 الأجواء'),
+                _label(AppStrings.ambiance),
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -711,37 +1062,29 @@ final _otherCategoryCtrl = TextEditingController();
                     final active = _atmosphere == a[1];
                     return Expanded(
                       child: GestureDetector(
-                        onTap: () =>
-                            setState(() => _atmosphere = a[1] as String),
-                        child: Container(
-                          margin:
-                              const EdgeInsets.symmetric(horizontal: 4),
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 12),
+                        onTap: () => setState(() => _atmosphere = a[1]),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
                           decoration: BoxDecoration(
                             color: active
-                                ? Colors.white.withOpacity(0.15)
-                                : Colors.white.withOpacity(0.06),
-                            borderRadius: BorderRadius.circular(12),
+                                ? _kOrange.withValues(alpha: 0.15)
+                                : Colors.white.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(14),
                             border: Border.all(
                               color: active
-                                  ? Colors.white.withOpacity(0.4)
-                                  : Colors.white.withOpacity(0.1),
+                                  ? _kOrange.withValues(alpha: 0.5)
+                                  : Colors.white.withValues(alpha: 0.08),
                             ),
                           ),
                           child: Column(
                             children: [
-                              Text(a[0] as String,
-                                  style:
-                                      const TextStyle(fontSize: 22)),
-                              const SizedBox(height: 4),
-                              Text(a[1] as String,
-                                  style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      color: active
-                                          ? Colors.white
-                                          : const Color(0xFF94A3B8))),
+                              Text(a[0], style: const TextStyle(fontSize: 24)),
+                              const SizedBox(height: 5),
+                              Text(a[1],
+                                  style: _tj(11, weight: FontWeight.w700,
+                                      color: active ? _kOrange : _kTextSec)),
                             ],
                           ),
                         ),
@@ -750,8 +1093,8 @@ final _otherCategoryCtrl = TextEditingController();
                   }).toList(),
                 ),
 
-                const SizedBox(height: 20),
-                _label('🏷️ تفاصيل إضافية'),
+                const SizedBox(height: 22),
+                _label('🏷️ ${AppStrings.additionalDetails}'),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
@@ -761,34 +1104,30 @@ final _otherCategoryCtrl = TextEditingController();
                     return GestureDetector(
                       onTap: () => setState(() =>
                           active ? _tags.remove(t) : _tags.add(t)),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 7),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                         decoration: BoxDecoration(
                           color: active
-                              ? const Color(0xFFF26500).withOpacity(0.15)
-                              : Colors.white.withOpacity(0.06),
+                              ? _kOrange.withValues(alpha: 0.15)
+                              : Colors.white.withValues(alpha: 0.06),
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(
                             color: active
-                                ? const Color(0xFFF26500).withOpacity(0.5)
-                                : Colors.white.withOpacity(0.1),
+                                ? _kOrange.withValues(alpha: 0.5)
+                                : Colors.white.withValues(alpha: 0.1),
                           ),
                         ),
                         child: Text(t,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: active
-                                    ? const Color(0xFFF26500)
-                                    : const Color(0xFF94A3B8))),
+                            style: _tj(11, weight: FontWeight.w600,
+                                color: active ? _kOrange : _kTextSec)),
                       ),
                     );
                   }).toList(),
                 ),
 
-                const SizedBox(height: 20),
-                _label('💰 التكلفة للفرد'),
+                const SizedBox(height: 22),
+                _label('💰 ${AppStrings.costPerPerson}'),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
@@ -797,32 +1136,28 @@ final _otherCategoryCtrl = TextEditingController();
                     'أقل من 50 ر.س',
                     '50-100 ر.س',
                     '100-200 ر.س',
-                    '200+ ر.س'
+                    '200+ ر.س',
                   ].map((p) {
                     final active = _priceRange == p;
                     return GestureDetector(
                       onTap: () => setState(() => _priceRange = p),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                         decoration: BoxDecoration(
                           color: active
-                              ? const Color(0xFFF26500).withOpacity(0.15)
-                              : Colors.white.withOpacity(0.06),
-                          borderRadius: BorderRadius.circular(10),
+                              ? _kOrange.withValues(alpha: 0.15)
+                              : Colors.white.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(12),
                           border: Border.all(
                             color: active
-                                ? const Color(0xFFF26500).withOpacity(0.5)
-                                : Colors.white.withOpacity(0.1),
+                                ? _kOrange.withValues(alpha: 0.5)
+                                : Colors.white.withValues(alpha: 0.1),
                           ),
                         ),
                         child: Text(p,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: active
-                                    ? const Color(0xFFF26500)
-                                    : const Color(0xFF94A3B8))),
+                            style: _tj(12, weight: FontWeight.w600,
+                                color: active ? _kOrange : _kTextSec)),
                       ),
                     );
                   }).toList(),
@@ -831,7 +1166,7 @@ final _otherCategoryCtrl = TextEditingController();
             ),
           ),
         ),
-        _nextBtn('التالي ←', _nextStep),
+        _nextBtn(AppStrings.next, _nextStep),
       ],
     );
   }
@@ -846,82 +1181,167 @@ final _otherCategoryCtrl = TextEditingController();
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _label('🍽️ الأطباق'),
+                _label(AppStrings.dishes),
                 const SizedBox(height: 10),
 
-                ..._dishes.map((d) => Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    children: [
-                      const Text('🍽️', style: TextStyle(fontSize: 18)),
-                      const SizedBox(width: 10),
-                      Expanded(
-                          child: Text(d['name'] ?? '',
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 11))),
-                      Text('${d['price']} ر.س',
-                          style: const TextStyle(
-                              color: Color(0xFFF26500),
-                              fontWeight: FontWeight.w700,
-                              fontSize: 11)),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: () => setState(() => _dishes.remove(d)),
-                        child: const Icon(Icons.close,
-                            color: Color(0xFF94A3B8), size: 16),
-                      ),
-                    ],
-                  ),
-                )),
+                ..._dishes.asMap().entries.map((entry) {
+                  final i = entry.key;
+                  final d = entry.value;
+                  final photoUrl = d['photo_url'] as String?;
+                  final previewBytes = d['preview_bytes'] as Uint8List?;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: _kCardBg,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        GestureDetector(
+                          onTap: () => _pickDishPhotoForIndex(i),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: previewBytes != null
+                                ? Image.memory(previewBytes,
+                                    width: 38, height: 38, fit: BoxFit.cover)
+                                : (photoUrl != null && photoUrl.isNotEmpty)
+                                    ? Image.network(photoUrl,
+                                        width: 38, height: 38, fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => Container(
+                                          width: 38, height: 38,
+                                          color: _kDark2,
+                                          child: Icon(PhosphorIcons.camera(),
+                                              color: _kTextSec, size: 16),
+                                        ))
+                                    : Container(
+                                        width: 38, height: 38,
+                                        color: _kDark2,
+                                        child: Icon(PhosphorIcons.camera(),
+                                            color: _kTextSec, size: 16),
+                                      ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text((d['name'] as String?) ?? '', style: _tj(12))),
+                        Text('${d['price']} ${AppStrings.sar}',
+                            style: _tj(12, weight: FontWeight.w700, color: _kOrange)),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => setState(() => _dishes.removeAt(i)),
+                          child: const Icon(Icons.close, color: _kTextSec, size: 16),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
 
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.04),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: Colors.white.withOpacity(0.08)),
+                    color: Colors.white.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
                   ),
                   child: Column(
                     children: [
-                      _input(
-                          controller: _dishNameCtrl,
-                          hint: 'اسم الطبق'),
+                      _input(controller: _dishNameCtrl, hint: AppStrings.dishName),
+                      const SizedBox(height: 8),
+                      // Dish photo picker
+                      GestureDetector(
+                        onTap: _dishPhotoUploading ? null : _pickDishPhotoForPending,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.04),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _pendingDishPhotoUrl != null
+                                  ? _kOrange.withValues(alpha: 0.5)
+                                  : Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              if (_dishPhotoUploading)
+                                const SizedBox(
+                                  width: 32, height: 32,
+                                  child: Center(
+                                    child: SizedBox(
+                                      width: 16, height: 16,
+                                      child: CircularProgressIndicator(
+                                          color: _kOrange, strokeWidth: 2),
+                                    ),
+                                  ),
+                                )
+                              else if (_pendingDishPhoto != null)
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: Image.memory(_pendingDishPhoto!,
+                                      width: 32, height: 32, fit: BoxFit.cover),
+                                )
+                              else
+                                Icon(PhosphorIcons.camera(),
+                                    color: _kTextSec, size: 16),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _dishPhotoUploading
+                                      ? AppStrings.uploadingImage
+                                      : _pendingDishPhotoUrl != null
+                                          ? AppStrings.imageUploaded
+                                          : AppStrings.addDishPhotoOptional,
+                                  style: _tj(11,
+                                      color: _pendingDishPhotoUrl != null
+                                          ? _kOrange
+                                          : _kTextSec),
+                                ),
+                              ),
+                              if (_pendingDishPhoto != null && !_dishPhotoUploading)
+                                GestureDetector(
+                                  onTap: () => setState(() {
+                                    _pendingDishPhoto = null;
+                                    _pendingDishPhotoUrl = null;
+                                  }),
+                                  child: const Icon(Icons.close,
+                                      color: _kTextSec, size: 14),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 8),
                       Row(
                         children: [
                           Expanded(
                               child: _input(
                                   controller: _dishPriceCtrl,
-                                  hint: 'السعر',
+                                  hint: AppStrings.price,
                                   keyboardType: TextInputType.number)),
                           const SizedBox(width: 8),
                           GestureDetector(
                             onTap: () {
-                              if (_dishNameCtrl.text.isNotEmpty) {
+                              if (_dishNameCtrl.text.isNotEmpty && !_dishPhotoUploading) {
                                 setState(() {
                                   _dishes.add({
                                     'name': _dishNameCtrl.text.trim(),
                                     'price': _dishPriceCtrl.text.trim(),
+                                    'photo_url': _pendingDishPhotoUrl,
                                   });
+                                  _pendingDishPhoto = null;
+                                  _pendingDishPhotoUrl = null;
                                   _dishNameCtrl.clear();
                                   _dishPriceCtrl.clear();
                                 });
                               }
                             },
                             child: Container(
-                              padding: const EdgeInsets.all(12),
+                              padding: const EdgeInsets.all(13),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFF26500),
-                                borderRadius: BorderRadius.circular(10),
+                                color: _kOrange,
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                              child: const Icon(Icons.add,
-                                  color: Colors.white, size: 20),
+                              child: Icon(PhosphorIcons.plus(), color: Colors.white, size: 20),
                             ),
                           ),
                         ],
@@ -930,32 +1350,26 @@ final _otherCategoryCtrl = TextEditingController();
                   ),
                 ),
 
-                const SizedBox(height: 20),
-                _label('✍️ وصف التجربة *'),
+                const SizedBox(height: 22),
+                _label('✍️ ${AppStrings.description} *'),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.07),
+                    color: Colors.white.withValues(alpha: 0.07),
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                        color: Colors.white.withOpacity(0.12)),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
                   ),
                   child: TextField(
                     controller: _descController,
                     maxLines: 4,
                     maxLength: 500,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 13),
+                    style: _tj(13),
                     decoration: InputDecoration(
-                      hintText:
-                          'شاركنا تجربتك... كيف كان الطعام؟ الخدمة؟ الأجواء؟',
-                      hintStyle: TextStyle(
-                          color: Colors.white.withOpacity(0.3),
-                          fontSize: 12),
+                      hintText: AppStrings.descHint,
+                      hintStyle: _tj(12, color: Colors.white.withValues(alpha: 0.3)),
                       border: InputBorder.none,
                       contentPadding: const EdgeInsets.all(14),
-                      counterStyle: TextStyle(
-                          color: Colors.white.withOpacity(0.3)),
+                      counterStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
                     ),
                   ),
                 ),
@@ -968,7 +1382,7 @@ final _otherCategoryCtrl = TextEditingController();
             ),
           ),
         ),
-        _nextBtn(_loading ? '...' : '🔥 نشر التجربة',
+        _nextBtn(_loading ? '...' : AppStrings.publishExperienceCta,
             _loading ? () {} : _submit),
       ],
     );
@@ -982,47 +1396,54 @@ final _otherCategoryCtrl = TextEditingController();
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text('🎉', style: TextStyle(fontSize: 64)),
-            const SizedBox(height: 16),
-            const Text('تجربتك انتشرت!',
-                style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white)),
-            const SizedBox(height: 8),
-            const Text(
-              'شكراً — تجربتك ستساعد أصدقاءك يختارون صح 🔥',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontSize: 13,
-                  color: Color(0xFF94A3B8),
-                  height: 1.6),
+            Container(
+              width: 100, height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _kOrange.withValues(alpha: 0.15),
+                boxShadow: [
+                  BoxShadow(
+                    color: _kOrange.withValues(alpha: 0.3),
+                    blurRadius: 30,
+                    spreadRadius: 5,
+                  ),
+                ],
+              ),
+              child: const Center(
+                child: Text('🎉', style: TextStyle(fontSize: 48)),
+              ),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
+            Text(AppStrings.experienceShared,
+                style: _tj(26, weight: FontWeight.w900)),
+            const SizedBox(height: 10),
+            Text(
+              AppStrings.thanksMessage,
+              textAlign: TextAlign.center,
+              style: _tj(13, color: _kTextSec, height: 1.7),
+            ),
+            const SizedBox(height: 36),
             GestureDetector(
               onTap: () => Navigator.pop(context),
               child: Container(
                 width: double.infinity,
-                height: 54,
+                height: 56,
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                    colors: [Color(0xFFF26500), Color(0xFFFF7A1A)],
+                    colors: [_kOrange, Color(0xFFFF8C33)],
                   ),
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(16),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFF26500).withOpacity(0.4),
-                      blurRadius: 16,
+                      color: _kOrange.withValues(alpha: 0.4),
+                      blurRadius: 18,
                       offset: const Offset(0, 6),
-                    )
+                    ),
                   ],
                 ),
-                child: const Center(
-                  child: Text('العودة للفيد',
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white)),
+                child: Center(
+                  child: Text(AppStrings.backToFeed,
+                      style: _tj(16, weight: FontWeight.w800)),
                 ),
               ),
             ),
@@ -1033,36 +1454,39 @@ final _otherCategoryCtrl = TextEditingController();
   }
 
   // ── HELPERS
-  Widget _label(String text) => Text(text,
-      style: const TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          color: Color(0xFF94A3B8)));
+  Widget _label(String text) => Row(
+    children: [
+      Container(width: 3, height: 16, color: _kOrange,
+          margin: const EdgeInsets.only(left: 8)),
+      Text(text, style: _tj(13, weight: FontWeight.w700, color: _kTextSec)),
+    ],
+  );
 
   Widget _input({
     required TextEditingController controller,
     required String hint,
     Function(String)? onChanged,
     TextInputType? keyboardType,
+    int? maxLength,
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.07),
+        color: Colors.white.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.12)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
       child: TextField(
         controller: controller,
         onChanged: onChanged,
         keyboardType: keyboardType,
-        style: const TextStyle(color: Colors.white, fontSize: 13),
+        maxLength: maxLength,
+        style: _tj(13),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle:
-              TextStyle(color: Colors.white.withOpacity(0.3)),
+          hintStyle: _tj(12, color: Colors.white.withValues(alpha: 0.3)),
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(
-              horizontal: 14, vertical: 13),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          counterStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
         ),
       ),
     );
@@ -1078,13 +1502,11 @@ final _otherCategoryCtrl = TextEditingController();
     ),
     child: Row(
       children: [
-        const Icon(Icons.warning_amber_rounded,
-            color: Color(0xFF991B1B), size: 16),
+        const Icon(Icons.warning_amber_rounded, color: Color(0xFF991B1B), size: 16),
         const SizedBox(width: 8),
         Expanded(
             child: Text(msg,
-                style: const TextStyle(
-                    fontSize: 11, color: Color(0xFF991B1B)))),
+                style: _tj(11, color: const Color(0xFF991B1B)))),
       ],
     ),
   );
@@ -1094,27 +1516,23 @@ final _otherCategoryCtrl = TextEditingController();
       onTap: onTap,
       child: Container(
         width: double.infinity,
-        height: 54,
+        height: 56,
         margin: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           gradient: const LinearGradient(
-            colors: [Color(0xFFF26500), Color(0xFFFF7A1A)],
+            colors: [_kOrange, Color(0xFFFF8C33)],
           ),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFFF26500).withOpacity(0.4),
-              blurRadius: 16,
+              color: _kOrange.withValues(alpha: 0.4),
+              blurRadius: 18,
               offset: const Offset(0, 6),
-            )
+            ),
           ],
         ),
         child: Center(
-          child: Text(label,
-              style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white)),
+          child: Text(label, style: _tj(16, weight: FontWeight.w800)),
         ),
       ),
     );

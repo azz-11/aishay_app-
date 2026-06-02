@@ -36,7 +36,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   void _goInvite() {
-    Navigator.of(context).pushReplacement(
+    Navigator.of(context).push(
       PageRouteBuilder(
         pageBuilder: (_, __, ___) => const InviteScreen(),
         transitionsBuilder: (_, anim, __, child) =>
@@ -47,7 +47,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
   }
 
   void _goLogin() {
-    Navigator.of(context).pushReplacement(
+    Navigator.of(context).push(
       PageRouteBuilder(
         pageBuilder: (_, __, ___) => const LoginScreen(),
         transitionsBuilder: (_, anim, __, child) =>
@@ -106,7 +106,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
                   // وصف
                   const Text(
-                    'عش تجربة المطعم\nقبل ما تزوره 🔥',
+                    'عش تجربة المطعم\nقبل ما تزوره',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 18,
@@ -130,7 +130,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
                   // زر الدعوة
                   _buildBtn(
-                    label: '🎟️ عندي رمز دعوة',
+                    label: 'عندي رمز دعوة',
                     primary: true,
                     onTap: _goInvite,
                   ),
@@ -158,40 +158,47 @@ class _WelcomeScreenState extends State<WelcomeScreen>
     required bool primary,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        width: double.infinity,
-        height: 54,
-        decoration: BoxDecoration(
-          gradient: primary
-              ? const LinearGradient(
-                  colors: [Color(0xFFF26500), Color(0xFFFF7A1A)],
-                )
-              : null,
-          color: primary ? null : Colors.transparent,
+    // Material + InkWell so the tappable area exactly matches the painted box
+    // (more reliable hit-testing on web/PWA than a transformed GestureDetector).
+    return SizedBox(
+      width: double.infinity,
+      height: 54,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(14),
-          border: primary
-              ? null
-              : Border.all(color: Colors.white.withOpacity(0.2)),
-          boxShadow: primary
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFFF26500).withOpacity(0.4),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ]
-              : [],
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-              color: primary ? Colors.white : Colors.white.withOpacity(0.8),
+          child: Ink(
+            decoration: BoxDecoration(
+              gradient: primary
+                  ? const LinearGradient(
+                      colors: [Color(0xFFF26500), Color(0xFFFF7A1A)],
+                    )
+                  : null,
+              color: primary ? null : Colors.transparent,
+              borderRadius: BorderRadius.circular(14),
+              border: primary
+                  ? null
+                  : Border.all(color: Colors.white.withValues(alpha: 0.2)),
+              boxShadow: primary
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFFF26500).withValues(alpha: 0.4),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Center(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: primary ? Colors.white : Colors.white.withValues(alpha: 0.8),
+                ),
+              ),
             ),
           ),
         ),

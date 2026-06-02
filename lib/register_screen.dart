@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'home_screen.dart';
+import 'security_utils.dart';
 
 class RegisterScreen extends StatefulWidget {
   final String inviteCode;
@@ -45,13 +48,39 @@ class _RegisterScreenState extends State<RegisterScreen>
   }
 
   Future<void> _register() async {
-    if (_nameController.text.trim().isEmpty ||
-        _usernameController.text.trim().isEmpty ||
-        _emailController.text.trim().isEmpty ||
-        _passController.text.trim().isEmpty) {
+    debugPrint('[register] _register tapped (invite="${widget.inviteCode}")');
+    // Sanitize + validate inputs before hitting the backend.
+    final name = sanitizeAndCap(_nameController.text, kMaxNameLength);
+    final username = _usernameController.text.trim().toLowerCase();
+    final email = _emailController.text.trim();
+    final password = _passController.text;
+
+    if (name.isEmpty || username.isEmpty || email.isEmpty || password.isEmpty) {
+      debugPrint('[register] validation failed: empty field(s)');
       setState(() => _error = 'يرجى تعبئة جميع الحقول');
       return;
     }
+    if (!isValidEmail(email)) {
+      debugPrint('[register] validation failed: invalid email "$email"');
+      setState(() => _error = 'صيغة البريد الإلكتروني غير صحيحة');
+      return;
+    }
+    if (username.length > kMaxUsernameLength) {
+      debugPrint('[register] validation failed: username too long (${username.length})');
+      setState(() => _error = 'اسم المستخدم طويل جداً (الحد $kMaxUsernameLength حرفاً)');
+      return;
+    }
+    if (!isValidUsername(username)) {
+      debugPrint('[register] validation failed: invalid username "$username"');
+      setState(() => _error = 'اسم المستخدم: حروف إنجليزية وأرقام و _ فقط');
+      return;
+    }
+    if (password.length < 8) {
+      debugPrint('[register] validation failed: password too short (${password.length})');
+      setState(() => _error = 'كلمة المرور يجب أن تكون 8 أحرف على الأقل');
+      return;
+    }
+    debugPrint('[register] validation passed (email="$email", username="$username")');
 
     setState(() {
       _loading = true;
@@ -60,40 +89,152 @@ class _RegisterScreenState extends State<RegisterScreen>
 
     try {
       // إنشاء الحساب
+      debugPrint('[register] calling auth.signUp...');
       final res = await Supabase.instance.client.auth.signUp(
-        email: _emailController.text.trim(),
-        password: _passController.text.trim(),
+        email: email,
+        password: password,
       );
+      debugPrint('[register] signUp returned: user=${res.user?.id}, '
+          'session=${res.session != null}');
 
       if (res.user != null) {
-        // تحديث رمز الدعوة كمستخدم
-        await Supabase.instance.client
+        // تحديث رمز الدعوة كمستخدم (.select() so we can see what RLS allowed)
+        debugPrint('[register] updating invitation_codes is_used=true for "${widget.inviteCode}"...');
+        final codeUpdate = await Supabase.instance.client
             .from('invitation_codes')
             .update({'is_used': true})
-            .eq('code', widget.inviteCode);
+            .eq('code', widget.inviteCode)
+            .select();
+        debugPrint('[register] invitation_codes update result: $codeUpdate');
 
-        // إضافة بيانات المستخدم
-        await Supabase.instance.client.from('users').insert({
+        // Upsert (not insert): a DB trigger already creates the users row on
+        // signUp, so a plain insert collides on the primary key. Upsert updates
+        // that row instead of erroring.
+        debugPrint('[register] upserting users row for ${res.user!.id}...');
+        final userUpsert = await Supabase.instance.client.from('users').upsert({
           'id': res.user!.id,
-          'display_name': _nameController.text.trim(),
-          'username': _usernameController.text.trim().toLowerCase(),
+          'display_name': name,
+          'username': username,
           'language': 'ar',
-        });
+        }, onConflict: 'id').select();
+        debugPrint('[register] users upsert result: $userUpsert');
 
-        setState(() => _step = 2);
+        debugPrint('[register] success → advancing to step 2');
+        if (mounted) setState(() => _step = 2);
+      } else {
+        debugPrint('[register] signUp returned null user '
+            '(email confirmation likely required — no session yet)');
       }
     } on AuthException catch (e) {
-      setState(() => _error = e.message);
-    } catch (e) {
-      setState(() => _error = e.toString());
+      debugPrint('[register] AuthException: ${e.message}');
+      if (mounted) setState(() => _error = e.message);
+    } catch (e, st) {
+      debugPrint('[register] ERROR: $e');
+      debugPrint('$st');
+      if (mounted) setState(() => _error = e.toString());
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _signInWithGoogle() async {
+    debugPrint('[google] sign-in tapped (invite="${widget.inviteCode}")');
+    try {
+      // TODO: replace with your Google OAuth Web client ID (from Google Cloud Console).
+      const webClientId = 'YOUR_GOOGLE_CLIENT_ID';
+
+      final GoogleSignIn googleSignIn = GoogleSignIn(
+        clientId: webClientId,
+        scopes: ['email'],
+      );
+
+      debugPrint('[google] launching account picker...');
+      final googleUser = await googleSignIn.signIn();
+      if (googleUser == null) {
+        debugPrint('[google] cancelled by user');
+        return;
+      }
+      debugPrint('[google] account selected: ${googleUser.email}');
+
+      final googleAuth = await googleUser.authentication;
+      final accessToken = googleAuth.accessToken;
+      final idToken = googleAuth.idToken;
+      debugPrint('[google] tokens: idToken=${idToken != null}, '
+          'accessToken=${accessToken != null}');
+
+      if (idToken == null) {
+        debugPrint('[google] no idToken returned → aborting');
+        return;
+      }
+
+      debugPrint('[google] calling auth.signInWithIdToken...');
+      await Supabase.instance.client.auth.signInWithIdToken(
+        provider: OAuthProvider.google,
+        idToken: idToken,
+        accessToken: accessToken,
+      );
+
+      // Check if user exists in users table, if not create
+      final user = Supabase.instance.client.auth.currentUser;
+      debugPrint('[google] signed in as ${user?.id}');
+      if (user != null) {
+        debugPrint('[google] checking for existing users row...');
+        final existing = await Supabase.instance.client
+            .from('users')
+            .select('id')
+            .eq('id', user.id)
+            .maybeSingle();
+        debugPrint('[google] existing users row: $existing');
+
+        if (existing == null) {
+          debugPrint('[google] inserting new users row for ${user.id}...');
+          final userInsert = await Supabase.instance.client.from('users').insert({
+            'id': user.id,
+            'display_name': googleUser.displayName ?? googleUser.email,
+            'username': googleUser.email.split('@')[0],
+            'avatar_url': googleUser.photoUrl,
+            'language': 'ar',
+          }).select();
+          debugPrint('[google] users insert result: $userInsert');
+
+          // Mark the invite code as used for this new Google account.
+          debugPrint('[google] updating invitation_codes for "${widget.inviteCode}"...');
+          final codeUpdate = await Supabase.instance.client
+              .from('invitation_codes')
+              .update({'is_used': true})
+              .eq('code', widget.inviteCode)
+              .select();
+          debugPrint('[google] invitation_codes update result: $codeUpdate');
+        }
+      }
+
+      if (mounted) {
+        debugPrint('[google] success → navigating to Home');
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+          (route) => false,
+        );
+      }
+    } catch (e, st) {
+      debugPrint('[google] ERROR: $e');
+      debugPrint('$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('فشل تسجيل الدخول بـ Google: $e',
+                style: GoogleFonts.tajawal()),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: const Color(0xFF1A2340),
       body: SafeArea(
         child: FadeTransition(
@@ -106,7 +247,12 @@ class _RegisterScreenState extends State<RegisterScreen>
 
   Widget _buildForm() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
       child: Column(
         children: [
           const SizedBox(height: 40),
@@ -120,7 +266,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.08),
+                    color: Colors.white.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Icon(Icons.arrow_back_ios_new,
@@ -160,7 +306,7 @@ class _RegisterScreenState extends State<RegisterScreen>
           Container(
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.1),
+              color: Colors.white.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(2),
             ),
             child: FractionallySizedBox(
@@ -266,6 +412,77 @@ class _RegisterScreenState extends State<RegisterScreen>
           // زر إنشاء الحساب
           _RegisterButton(loading: _loading, onTap: _register),
 
+          const SizedBox(height: 24),
+
+          // ── Divider ──────────────────────────────────────────────────────
+          Row(
+            children: [
+              Expanded(
+                child: Divider(color: Colors.white.withValues(alpha: 0.12), height: 1),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  'أو تسجيل الدخول بـ',
+                  style: GoogleFonts.tajawal(
+                    color: const Color(0xFF94A3B8),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Divider(color: Colors.white.withValues(alpha: 0.12), height: 1),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // ── Google sign-in button ────────────────────────────────────────
+          GestureDetector(
+            onTap: _signInWithGoogle,
+            child: Container(
+              width: double.infinity,
+              height: 52,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Image.network(
+                    'https://www.google.com/favicon.ico',
+                    width: 20,
+                    height: 20,
+                    errorBuilder: (_, __, ___) => const Icon(
+                      Icons.g_mobiledata_rounded,
+                      color: Color(0xFF4285F4),
+                      size: 26,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'متابعة بـ Google',
+                    style: GoogleFonts.tajawal(
+                      color: Colors.black87,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
           const SizedBox(height: 40),
         ],
       ),
@@ -302,8 +519,9 @@ class _RegisterScreenState extends State<RegisterScreen>
             const SizedBox(height: 36),
             GestureDetector(
   onTap: () {
-    Navigator.of(context).pushReplacement(
+    Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const HomeScreen()),
+      (route) => false,
     );
   },
               child: Container(
@@ -316,7 +534,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                   borderRadius: BorderRadius.circular(14),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFF26500).withOpacity(0.4),
+                      color: const Color(0xFFF26500).withValues(alpha: 0.4),
                       blurRadius: 16,
                       offset: const Offset(0, 6),
                     ),
@@ -365,9 +583,9 @@ class _RegisterScreenState extends State<RegisterScreen>
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.07),
+        color: Colors.white.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.12)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
       child: TextField(
         controller: controller,
@@ -377,9 +595,9 @@ class _RegisterScreenState extends State<RegisterScreen>
         style: const TextStyle(color: Colors.white, fontSize: 14),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+          hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
           prefixIcon:
-              Icon(icon, color: Colors.white.withOpacity(0.4), size: 20),
+              Icon(icon, color: Colors.white.withValues(alpha: 0.4), size: 20),
           suffixIcon: suffix,
           border: InputBorder.none,
           contentPadding:
@@ -443,7 +661,7 @@ class _RegisterButtonState extends State<_RegisterButton>
             borderRadius: BorderRadius.circular(14),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFF26500).withOpacity(0.4),
+                color: const Color(0xFFF26500).withValues(alpha: 0.4),
                 blurRadius: 16,
                 offset: const Offset(0, 6),
               ),

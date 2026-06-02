@@ -18,19 +18,41 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="بس مو أي مطعم">
 
-  <!-- iOS meta tags & icons -->
+  <!-- Viewport: viewport-fit=cover lets Flutter handle the iPhone notch safely -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+
+  <!-- PWA theme color (Android Chrome + Safari tab bar) -->
+  <meta name="theme-color" content="#F26500">
+
+  <!-- iOS PWA meta tags -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="aishay_app">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="أي شيء">
+
+  <!-- iOS home screen icon & splash -->
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="apple-touch-startup-image" href="icons/Icon-512.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>aishay_app</title>
+  <title>أي شيء</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Force the service worker to check for a newer build on each launch so the
+       installed PWA doesn't keep serving a stale cached version. -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (registrations) {
+        for (let registration of registrations) {
+          registration.update();
+        }
+      });
+    }
+  </script>
 </head>
 <body>
   <!--

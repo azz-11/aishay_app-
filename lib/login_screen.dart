@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'home_screen.dart';
@@ -16,6 +17,16 @@ class _LoginScreenState extends State<LoginScreen>
   bool _obscure = true;
   bool _loading = false;
   String? _error;
+
+  // ── Rate limiting: lock out after repeated failures ──────────────────────
+  static const int _maxAttempts = 5;
+  static const Duration _lockoutDuration = Duration(seconds: 30);
+  int _failedAttempts = 0;
+  DateTime? _lockoutUntil;
+  Timer? _lockoutTimer;
+
+  bool get _isLockedOut =>
+      _lockoutUntil != null && DateTime.now().isBefore(_lockoutUntil!);
 
   late AnimationController _logoCtrl;
   late AnimationController _formCtrl;
@@ -56,6 +67,7 @@ class _LoginScreenState extends State<LoginScreen>
 
   @override
   void dispose() {
+    _lockoutTimer?.cancel();
     _logoCtrl.dispose();
     _formCtrl.dispose();
     _emailController.dispose();
@@ -64,6 +76,12 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _login() async {
+    // Block while locked out, refreshing the countdown message.
+    if (_isLockedOut) {
+      _startLockoutCountdown();
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
@@ -73,35 +91,102 @@ class _LoginScreenState extends State<LoginScreen>
         email: _emailController.text.trim(),
         password: _passController.text.trim(),
       );
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const HomeScreen(),
-          transitionsBuilder: (_, anim, __, child) =>
-              FadeTransition(opacity: anim, child: child),
-          transitionDuration: const Duration(milliseconds: 500),
-        ),
-      );
-    }
+      // Success — clear any failure state.
+      _failedAttempts = 0;
+      _lockoutUntil = null;
+      _lockoutTimer?.cancel();
+      if (mounted) {
+        // Clear the welcome/login stack so back doesn't return to auth.
+        Navigator.of(context).pushAndRemoveUntil(
+          PageRouteBuilder(
+            pageBuilder: (_, __, ___) => const HomeScreen(),
+            transitionsBuilder: (_, anim, __, child) =>
+                FadeTransition(opacity: anim, child: child),
+            transitionDuration: const Duration(milliseconds: 500),
+          ),
+          (route) => false,
+        );
+      }
     } on AuthException catch (_) {
-      setState(() => _error = 'البريد أو كلمة المرور غير صحيحة');
+      _registerFailedAttempt('البريد أو كلمة المرور غير صحيحة');
     } catch (_) {
-      setState(() => _error = 'حدث خطأ، حاول مرة أخرى');
+      _registerFailedAttempt('حدث خطأ، حاول مرة أخرى');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _registerFailedAttempt(String message) {
+    _failedAttempts++;
+    if (_failedAttempts >= _maxAttempts) {
+      _lockoutUntil = DateTime.now().add(_lockoutDuration);
+      _startLockoutCountdown();
+    } else {
+      final left = _maxAttempts - _failedAttempts;
+      setState(() => _error = '$message (محاولات متبقية: $left)');
+    }
+  }
+
+  /// Ticks every second, showing the remaining lockout time, then clears it.
+  void _startLockoutCountdown() {
+    _lockoutTimer?.cancel();
+    void tick() {
+      if (!mounted || _lockoutUntil == null) return;
+      final remaining = _lockoutUntil!.difference(DateTime.now()).inSeconds;
+      if (remaining <= 0) {
+        _lockoutTimer?.cancel();
+        _failedAttempts = 0;
+        _lockoutUntil = null;
+        setState(() => _error = null);
+      } else {
+        setState(() =>
+            _error = 'تم تجاوز عدد المحاولات. حاول بعد $remaining ثانية');
+      }
+    }
+
+    tick();
+    _lockoutTimer =
+        Timer.periodic(const Duration(seconds: 1), (_) => tick());
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // Allow popping back to the Welcome screen (defensive; the route is pushed
+    // on top of Welcome, so it is already poppable).
+    return PopScope(
+      canPop: true,
+      child: Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: const Color(0xFF1A2340),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: EdgeInsets.only(
+            left: 24,
+            right: 24,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+          ),
           child: Column(
             children: [
-              const SizedBox(height: 60),
+              const SizedBox(height: 12),
+              // Back button → returns to the Welcome screen.
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.arrow_back_ios_new,
+                        color: Colors.white, size: 16),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
               FadeTransition(
                 opacity: _logoFade,
                 child: ScaleTransition(
@@ -152,7 +237,7 @@ class _LoginScreenState extends State<LoginScreen>
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       const Text(
-                        'مرحباً بعودتك 👋',
+                        'مرحباً بعودتك',
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w800,
@@ -267,21 +352,21 @@ class _LoginScreenState extends State<LoginScreen>
                         children: [
                           Expanded(
                             child: Divider(
-                                color: Colors.white.withOpacity(0.15)),
+                                color: Colors.white.withValues(alpha: 0.15)),
                           ),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 12),
                             child: Text(
                               'أو',
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.4),
+                                color: Colors.white.withValues(alpha: 0.4),
                                 fontSize: 12,
                               ),
                             ),
                           ),
                           Expanded(
                             child: Divider(
-                                color: Colors.white.withOpacity(0.15)),
+                                color: Colors.white.withValues(alpha: 0.15)),
                           ),
                         ],
                       ),
@@ -321,6 +406,7 @@ class _LoginScreenState extends State<LoginScreen>
           ),
         ),
       ),
+      ),
     );
   }
 }
@@ -346,9 +432,9 @@ class _InputField extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.07),
+        color: Colors.white.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.12)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
       child: TextField(
         controller: controller,
@@ -358,9 +444,9 @@ class _InputField extends StatelessWidget {
         style: const TextStyle(color: Colors.white, fontSize: 14),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+          hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
           prefixIcon: Icon(icon,
-              color: Colors.white.withOpacity(0.4), size: 20),
+              color: Colors.white.withValues(alpha: 0.4), size: 20),
           suffixIcon: suffix,
           border: InputBorder.none,
           contentPadding:
@@ -371,83 +457,55 @@ class _InputField extends StatelessWidget {
   }
 }
 
-class _LoginButton extends StatefulWidget {
+class _LoginButton extends StatelessWidget {
   final bool loading;
   final VoidCallback onTap;
 
   const _LoginButton({required this.loading, required this.onTap});
 
   @override
-  State<_LoginButton> createState() => _LoginButtonState();
-}
-
-class _LoginButtonState extends State<_LoginButton>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 120),
-      lowerBound: 0.95,
-      upperBound: 1.0,
-      value: 1.0,
-    );
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => _ctrl.reverse(),
-      onTapUp: (_) {
-        _ctrl.forward();
-        widget.onTap();
-      },
-      onTapCancel: () => _ctrl.forward(),
-      child: ScaleTransition(
-        scale: _ctrl,
-        child: Container(
-          width: double.infinity,
-          height: 54,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFFF26500), Color(0xFFFF7A1A)],
-            ),
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFF26500).withOpacity(0.4),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
+    return SizedBox(
+      width: double.infinity,
+      height: 54,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: loading ? null : onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Ink(
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFF26500), Color(0xFFFF7A1A)],
               ),
-            ],
-          ),
-          child: Center(
-            child: widget.loading
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2.5,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFF26500).withValues(alpha: 0.4),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Center(
+              child: loading
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : const Text(
+                      'دخول ←',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
                     ),
-                  )
-                : const Text(
-                    'دخول ←',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                    ),
-                  ),
+            ),
           ),
         ),
       ),

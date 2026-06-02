@@ -1,8 +1,33 @@
+﻿import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'add_experience_screen.dart';
+import 'app_locale.dart';
+import 'l10n/app_strings.dart';
 import 'experience_detail_screen.dart';
+import 'notifications_screen.dart';
 import 'profile_screen.dart';
+import 'search_screen.dart';
+
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const _kDark    = Color(0xFF0F1923);
+const _kDark2   = Color(0xFF1A2340);
+const _kOrange  = Color(0xFFF26500);
+const _kGold    = Color(0xFFC8931A);
+const _kCardBg  = Color(0xFF1E2D45);
+const _kTextSec = Color(0xFF94A3B8);
+
+TextStyle _tj(double size, FontWeight weight, Color color, {double height = 1.0}) =>
+    GoogleFonts.tajawal(fontSize: size, fontWeight: weight, color: color, height: height);
+
+const _kSaudiCities = [
+  'الكل', 'الرياض', 'جدة', 'مكة', 'المدينة',
+  'الدمام', 'الخبر', 'الطائف', 'أبها', 'تبوك', 'القصيم',
+];
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -11,153 +36,543 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _currentIndex = 0;
   List<Map<String, dynamic>> _experiences = [];
   Map<String, dynamic>? _topExperience;
   bool _loading = true;
   String _selectedCategory = 'الكل';
-  Map<String, dynamic>? _selectedExp; // التجربة المفتوحة
+  String _selectedCity = 'الكل';
+  String? _selectedMood;
+  Map<String, dynamic>? _selectedExp;
+  final _profileRefreshNotifier = ValueNotifier<int>(0);
+
+  String? _pressedCardId;
+  bool _shouldAnimateList = true;
+  int _page = 0;
+  bool _hasMore = true;
+  bool _loadingMore = false;
+  late AnimationController _shimmerController;
+  late AnimationController _ambientCtrl;
+  late AnimationController _notifPulseCtrl;
+  late Animation<double> _notifPulse;
+  final ScrollController _scrollController = ScrollController();
+  int _unreadCount = 0;
+  RealtimeChannel? _realtimeChannel;
+  RealtimeChannel? _notifChannel;
 
   final _categories = ['الكل', 'كافيهات', 'مشويات', 'سوشي', 'برغر', 'صحي'];
-  final _catIcons = ['🍽️', '☕', '🥩', '🍣', '🍔', '🥗'];
+  final _catIcons   = <PhosphorIconData>[
+    PhosphorIconsRegular.forkKnife,
+    PhosphorIconsRegular.coffee,
+    PhosphorIconsRegular.flame,
+    PhosphorIconsRegular.fish,
+    PhosphorIconsRegular.hamburger,
+    PhosphorIconsRegular.leaf,
+  ];
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _shimmerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat();
+    _ambientCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    )..repeat(reverse: true);
+    _notifPulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+    _notifPulse = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.35), weight: 40),
+      TweenSequenceItem(tween: Tween(begin: 1.35, end: 1.0), weight: 40),
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 20),
+    ]).animate(_notifPulseCtrl);
+    _scrollController.addListener(_onScroll);
+    AppLocale.notifier.addListener(_onLocaleChange);
+    _loadCity().then((_) => _loadData());
+    _subscribeRealtime();
+    _checkUnread();
+    _subscribeNotifRealtime();
   }
 
-  Future<void> _loadData() async {
-    setState(() => _loading = true);
+  void _subscribeRealtime() {
+    _realtimeChannel = Supabase.instance.client
+        .channel('home_experiences_feed')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'experiences',
+          callback: (payload) {
+            if (mounted && !_loading) _loadData();
+          },
+        )
+        .subscribe();
+  }
+
+  Future<void> _checkUnread() async {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
     try {
       final res = await Supabase.instance.client
-          .from('experiences')
-          .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(*)')
-          .order('created_at', ascending: false)
-          .limit(20);
-
-      final list = List<Map<String, dynamic>>.from(res);
-
-      for (int i = 0; i < list.length; i++) {
-        try {
-          final likes = await Supabase.instance.client
-              .from('likes')
-              .select('id')
-              .eq('experience_id', list[i]['id']);
-          list[i]['likes_count'] = likes.length;
-        } catch (_) {
-          list[i]['likes_count'] = 0;
-        }
+          .from('notifications')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('is_read', false);
+      if (mounted) {
+        setState(() => _unreadCount = (res as List).length);
       }
-
-      setState(() {
-        _experiences = list;
-        _topExperience = list.isNotEmpty ? list.first : null;
-        _loading = false;
-      });
     } catch (e) {
-      debugPrint('Error loading data: $e');
-      setState(() => _loading = false);
+      debugPrint('Check unread error: $e');
     }
   }
 
-  void _openExp(Map<String, dynamic> exp) {
-    setState(() => _selectedExp = exp);
+  void _subscribeNotifRealtime() {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+    _notifChannel = Supabase.instance.client
+        .channel('home_notif_badge_$userId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'notifications',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: userId,
+          ),
+          callback: (payload) {
+            if (mounted) _checkUnread();
+          },
+        )
+        .subscribe();
   }
+
+  void _onLocaleChange() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _shimmerController.dispose();
+    _ambientCtrl.dispose();
+    _notifPulseCtrl.dispose();
+    _scrollController.dispose();
+    AppLocale.notifier.removeListener(_onLocaleChange);
+    _profileRefreshNotifier.dispose();
+    if (_realtimeChannel != null) {
+      Supabase.instance.client.removeChannel(_realtimeChannel!);
+    }
+    _notifChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  // ── Persistence ────────────────────────────────────────────────────────────
+
+  Future<void> _loadCity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final city = prefs.getString('selected_city') ?? 'الكل';
+    if (mounted) setState(() => _selectedCity = city);
+  }
+
+  Future<void> _saveCity(String city) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('selected_city', city);
+  }
+
+  // ── Data loading ───────────────────────────────────────────────────────────
+
+  void _onScroll() {
+    if (_scrollController.hasClients &&
+        _scrollController.position.pixels >=
+            _scrollController.position.maxScrollExtent - 300) {
+      _loadData(loadMore: true);
+    }
+  }
+
+  static const _kPageSize = 10;
+  static const _kSelectFields =
+      'id, title, description, photos, rating_food, rating_service, '
+      'rating_ambiance, rating_clean, rating_value, atmosphere, price_range, '
+      'visit_time, tags, created_at, user_id, restaurant_id, '
+      'restaurant:restaurants(id, name_ar, city, category), '
+      'user:users!experiences_user_id_fkey(display_name, avatar_url)';
+
+  Future<void> _loadData({bool loadMore = false}) async {
+    if (loadMore) {
+      if (!_hasMore || _loadingMore || _loading) return;
+      setState(() => _loadingMore = true);
+    } else {
+      setState(() { _loading = true; _page = 0; _hasMore = true; });
+    }
+    try {
+      final from = _page * _kPageSize;
+      final res = await Supabase.instance.client
+          .from('experiences')
+          .select(_kSelectFields)
+          .order('created_at', ascending: false)
+          .range(from, from + _kPageSize - 1);
+
+      final list = List<Map<String, dynamic>>.from(res);
+
+      if (list.isNotEmpty) {
+        try {
+          final expIds = list.map((e) => e['id'].toString()).toList();
+          final allLikes = await Supabase.instance.client
+              .from('likes')
+              .select('experience_id')
+              .inFilter('experience_id', expIds);
+          final counts = <String, int>{};
+          for (final l in allLikes as List) {
+            final id = l['experience_id'].toString();
+            counts[id] = (counts[id] ?? 0) + 1;
+          }
+          for (int i = 0; i < list.length; i++) {
+            list[i]['likes_count'] = counts[list[i]['id'].toString()] ?? 0;
+          }
+        } catch (e) {
+          debugPrint('Likes count error: $e');
+          for (int i = 0; i < list.length; i++) {
+            list[i]['likes_count'] = 0;
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          if (loadMore) {
+            _experiences.addAll(list);
+            _loadingMore = false;
+          } else {
+            _experiences   = list;
+            _topExperience = list.isNotEmpty ? list.first : null;
+            _loading       = false;
+          }
+          _hasMore = list.length == _kPageSize;
+          _page++;
+        });
+        if (!loadMore && _shouldAnimateList) {
+          Future.delayed(const Duration(milliseconds: 1500), () {
+            if (mounted) setState(() => _shouldAnimateList = false);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading data: $e');
+      if (mounted) setState(() { _loading = false; _loadingMore = false; });
+    }
+  }
+
+  void _openExp(Map<String, dynamic> exp) => setState(() => _selectedExp = exp);
 
   void _closeExp() {
     setState(() => _selectedExp = null);
+    _loadData();
   }
 
+  // ── Filtering ──────────────────────────────────────────────────────────────
+
+  // Remove emojis, keep Arabic, ASCII, spaces and commas
+  String _stripEmojis(String s) => s.replaceAll(
+        RegExp(r'[^ -؀-ۿ\s,]'),
+        '',
+      ).trim();
+
   List<Map<String, dynamic>> get _filtered {
-    if (_selectedCategory == 'الكل') return _experiences;
-    return _experiences.where((e) {
-      final cat = e['restaurant']?['category'] ?? '';
-      return cat.contains(_selectedCategory);
-    }).toList();
+    var list = _experiences;
+
+    // City filter
+    if (_selectedCity != 'الكل') {
+      list = list.where((e) {
+        final city = (e['restaurant']?['city'] ?? '').toString().trim();
+        return city == _selectedCity || city.contains(_selectedCity);
+      }).toList();
+    }
+
+    // Category filter — strip emojis from stored value, handle both String and List
+    if (_selectedCategory != 'الكل') {
+      final keywords = _catKeywords(_selectedCategory);
+      list = list.where((e) {
+        final rawCat = e['restaurant']?['category'];
+        if (rawCat == null) return false;
+        final catStr = rawCat is List
+            ? rawCat.map((c) => c.toString()).join(',')
+            : rawCat.toString();
+        final cat = _stripEmojis(catStr).toLowerCase().trim();
+        if (cat.isEmpty) return false;
+        return keywords.any((kw) => cat.contains(_stripEmojis(kw).toLowerCase()));
+      }).toList();
+    }
+
+    // Mood filter
+    if (_selectedMood != null) {
+      list = list.where((e) {
+        final atmosphere = (e['atmosphere'] as String? ?? '').toLowerCase();
+
+        // tags is a Postgres array → List<dynamic>; handle String fallback for legacy data
+        final rawTags = e['tags'];
+        final List<String> tagList = rawTags == null
+            ? []
+            : rawTags is List
+                ? rawTags.map((t) => t.toString().toLowerCase()).toList()
+                : [rawTags.toString().toLowerCase()];
+
+        bool hasTag(String keyword) => tagList.any((t) => t.contains(keyword));
+
+        switch (_selectedMood) {
+          case 'هادئ':
+            return atmosphere.contains('هادي') || hasTag('هادي');
+          case 'جلسات خارجية':
+            return hasTag('خارجي');
+          case 'شبابي':
+            return hasTag('شبابي');
+          case 'رومانسي':
+            return hasTag('رومانسي');
+          case 'عائلي':
+            return hasTag('عائلي');
+          case 'للعمل':
+            return hasTag('للعمل') || hasTag('للدراسة');
+          default:
+            return true;
+        }
+      }).toList();
+    }
+
+    return list;
+  }
+
+  List<String> _catKeywords(String cat) {
+    const map = <String, List<String>>{
+      'كافيهات': ['كافيه', 'كافيهات', 'cafe', 'coffee'],
+      'مشويات':  ['مشوي', 'مشويات', 'grill', 'bbq', 'شواء'],
+      'سوشي':    ['سوشي', 'sushi', 'japanese'],
+      'برغر':    ['برغر', 'برجر', 'burger'],
+      'صحي':     ['صحي', 'healthy', 'salad', 'سلطة'],
+    };
+    return map[cat] ?? [cat];
   }
 
   double _avgRating(Map<String, dynamic> exp) {
-    final fields = ['rating_food', 'rating_service', 'rating_ambiance', 'rating_clean', 'rating_value'];
+    const fields = ['rating_food', 'rating_service', 'rating_ambiance', 'rating_clean', 'rating_value'];
     final vals = fields.map((f) => (exp[f] as num?)?.toDouble() ?? 0.0).where((v) => v > 0).toList();
     if (vals.isEmpty) return 0;
     return vals.reduce((a, b) => a + b) / vals.length;
   }
 
-  String _timeAgo(String? dateStr) {
-    if (dateStr == null) return '';
-    final date = DateTime.tryParse(dateStr);
-    if (date == null) return '';
-    final diff = DateTime.now().difference(date);
-    if (diff.inMinutes < 60) return 'منذ ${diff.inMinutes} دقيقة';
-    if (diff.inHours < 24) return 'منذ ${diff.inHours} ساعة';
-    return 'منذ ${diff.inDays} يوم';
+  // ── City picker bottom sheet ───────────────────────────────────────────────
+
+  void _showCityPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kDark2,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Text('اختر مدينة', style: _tj(16, FontWeight.w900, Colors.white)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+                itemCount: _kSaudiCities.length,
+                itemBuilder: (_, i) {
+                  final city = _kSaudiCities[i];
+                  final selected = _selectedCity == city;
+                  return GestureDetector(
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      setState(() => _selectedCity = city);
+                      await _saveCity(city);
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                      decoration: BoxDecoration(
+                        color: selected ? _kOrange.withValues(alpha: 0.15) : _kCardBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: selected ? _kOrange : Colors.white.withValues(alpha: 0.06),
+                          width: selected ? 1.2 : 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            city == 'الكل'
+                                ? PhosphorIcons.globe()
+                                : PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                            color: selected ? _kOrange : _kTextSec,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            city,
+                            style: _tj(13, selected ? FontWeight.w700 : FontWeight.w500,
+                                selected ? _kOrange : Colors.white),
+                          ),
+                          if (selected) ...[
+                            const Spacer(),
+                            Icon(Icons.check_rounded, color: _kOrange, size: 16),
+                          ],
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  String _stars(double rating) {
-    final full = rating.round();
-    return '${'★' * full}${'☆' * (5 - full)}';
-  }
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFAF5EE),
+      backgroundColor: _kDark,
       body: Stack(
         children: [
-          // الصفحة الرئيسية
-          SafeArea(
-            child: Column(
-              children: [
-                Container(
-                  color: const Color(0xFF1A2340),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  child: Row(
-                    children: [
-                      const Text('أي شيء',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFFF26500))),
-                      const Spacer(),
-                      IconButton(onPressed: () {}, icon: const Icon(Icons.search, color: Colors.white, size: 22)),
-                      IconButton(onPressed: () {}, icon: const Icon(Icons.notifications_outlined, color: Colors.white, size: 22)),
-                    ],
-                  ),
+          Positioned.fill(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [_kDark, Color(0xFF0D1720), Color(0xFF0A1118)],
+                  stops: [0.0, 0.55, 1.0],
                 ),
-                Expanded(
-                  child: _loading
-                      ? const Center(child: CircularProgressIndicator(color: Color(0xFFF26500)))
-                      : _experiences.isEmpty
-                          ? _buildEmpty()
-                          : RefreshIndicator(
-                              color: const Color(0xFFF26500),
-                              onRefresh: _loadData,
-                              child: ListView(
-                                children: [
-                                  if (_topExperience != null) _buildBanner(_topExperience!),
-                                  _buildCategories(),
-                                  const Padding(
-                                    padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Text('🕐 أحدث التجارب',
-                                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E))),
-                                        Text('شاهد الكل',
-                                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFF26500))),
-                                      ],
-                                    ),
-                                  ),
-                                  ..._filtered.map((exp) => _buildExpCard(exp)),
-                                  const SizedBox(height: 16),
-                                ],
-                              ),
-                            ),
-                ),
-              ],
+              ),
             ),
           ),
 
-          // صفحة التفاصيل فوق كل شيء
+          IndexedStack(
+            index: _currentIndex,
+            children: [
+              // 0 — Home feed
+              SafeArea(
+                child: Column(
+                  children: [
+                    _buildTopBar(),
+                    Expanded(
+                      child: _loading
+                          ? _buildShimmerGrid()
+                          : _experiences.isEmpty
+                              ? _buildEmpty()
+                              : RefreshIndicator(
+                                  color: _kOrange,
+                                  backgroundColor: _kCardBg,
+                                  onRefresh: _loadData,
+                                  child: CustomScrollView(
+                                    controller: _scrollController,
+                                    physics: const BouncingScrollPhysics(),
+                                    slivers: [
+                                      SliverToBoxAdapter(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            if (_topExperience != null) _buildBanner(_topExperience!),
+                                            _buildMoodSection(),
+                                            _buildCategories(),
+                                            Padding(
+                                              padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                                              child: Row(
+                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                children: [
+                                                  Text(AppStrings.latestExperiences,
+                                                      style: _tj(15, FontWeight.w800, Colors.white)),
+                                                  if (_filtered.isEmpty && _selectedCategory != 'الكل')
+                                                    Text(AppStrings.noResults,
+                                                        style: _tj(11, FontWeight.w500, _kTextSec))
+                                                  else
+                                                    Text(AppStrings.seeAll,
+                                                        style: _tj(12, FontWeight.w600, _kOrange)),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      // 2-column grid
+                                      if (_filtered.isNotEmpty)
+                                        SliverPadding(
+                                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 0),
+                                          sliver: SliverGrid(
+                                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                              crossAxisCount: 2,
+                                              crossAxisSpacing: 10,
+                                              mainAxisSpacing: 10,
+                                              childAspectRatio: 0.62,
+                                            ),
+                                            delegate: SliverChildBuilderDelegate(
+                                              (context, i) {
+                                                final card = _shouldAnimateList
+                                                    ? _AnimatedCard(
+                                                        delay: Duration(milliseconds: i * 80),
+                                                        child: _buildGridCard(_filtered[i]),
+                                                      )
+                                                    : _buildGridCard(_filtered[i]);
+                                                return RepaintBoundary(child: card);
+                                              },
+                                              childCount: _filtered.length,
+                                            ),
+                                          ),
+                                        ),
+                                      SliverToBoxAdapter(
+                                        child: _loadingMore
+                                            ? const Padding(
+                                                padding: EdgeInsets.symmetric(vertical: 24),
+                                                child: Center(
+                                                  child: CircularProgressIndicator(
+                                                      color: _kOrange, strokeWidth: 2),
+                                                ),
+                                              )
+                                            : const SizedBox(height: 100),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                    ),
+                  ],
+                ),
+              ),
+              // 1 — Search
+              const SearchScreen(),
+              // 2 — Add button slot
+              const SizedBox(),
+              // 3 — Notifications
+              const NotificationsScreen(),
+              // 4 — Profile
+              ProfileScreen(refreshNotifier: _profileRefreshNotifier),
+            ],
+          ),
+
+          // Detail screen overlay
           if (_selectedExp != null)
             Positioned.fill(
               child: ExperienceDetailScreen(
@@ -171,29 +586,96 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildEmpty() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+  // ── TOP BAR ────────────────────────────────────────────────────────────────
+
+  Widget _buildTopBar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _kDark,
+        border: Border(
+          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06), width: 0.8),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const Text('🍽️', style: TextStyle(fontSize: 52)),
-          const SizedBox(height: 12),
-          const Text('لا توجد تجارب بعد',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF1A2340))),
-          const SizedBox(height: 6),
-          const Text('كن أول من يشارك تجربته 🔥',
-              style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8))),
-          const SizedBox(height: 20),
-          GestureDetector(
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AddExperienceScreen())),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [Color(0xFFF26500), Color(0xFFFF7A1A)]),
-                borderRadius: BorderRadius.circular(12),
+          // Logo image with orange circle fallback
+          SizedBox(
+            height: 38,
+            child: Image.asset(
+              'assets/images/logo.png',
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => Container(
+                width: 38,
+                height: 38,
+                decoration: const BoxDecoration(color: _kOrange, shape: BoxShape.circle),
+                child: Center(child: Text('A', style: _tj(18, FontWeight.w900, Colors.white))),
               ),
-              child: const Text('+ أضف تجربة',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+            ),
+          ),
+          const Spacer(),
+          // Tappable city chip
+          GestureDetector(
+            onTap: _showCityPicker,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+              decoration: BoxDecoration(
+                color: _selectedCity != 'الكل' ? _kOrange.withValues(alpha: 0.15) : _kDark2,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _selectedCity != 'الكل' ? _kOrange : Colors.white.withValues(alpha: 0.12),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                      color: _kOrange, size: 13),
+                  const SizedBox(width: 4),
+                  Text(
+                    _selectedCity == 'الكل' ? 'الرياض' : _selectedCity,
+                    style: _tj(12, FontWeight.w600, Colors.white),
+                  ),
+                  const SizedBox(width: 3),
+                  Icon(Icons.keyboard_arrow_down_rounded,
+                      color: Colors.white.withValues(alpha: 0.5), size: 14),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Language toggle
+          GestureDetector(
+            onTap: () async {
+              await AppLocale.toggle();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      AppLocale.isArabic ? 'تم التبديل إلى العربية' : 'Switched to English',
+                      style: GoogleFonts.tajawal(),
+                    ),
+                    backgroundColor: _kOrange,
+                    duration: const Duration(seconds: 1),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppLocale.isArabic ? _kOrange : _kDark2,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: AppLocale.isArabic ? _kOrange : Colors.white.withValues(alpha: 0.2),
+                ),
+              ),
+              child: Text(AppLocale.isArabic ? 'AR' : 'EN',
+                  style: _tj(11, FontWeight.w800, Colors.white)),
             ),
           ),
         ],
@@ -201,134 +683,253 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildBanner(Map<String, dynamic> exp) {
-    final rating = _avgRating(exp);
-    final restName = exp['restaurant']?['name_ar'] ?? 'مطعم';
-    final city = exp['restaurant']?['city'] ?? '';
-    final likes = exp['likes_count'] ?? 0;
-    final photos = exp['photos'] as List? ?? [];
+  // ── EMPTY STATE ────────────────────────────────────────────────────────────
 
-    return GestureDetector(
-      onTap: () => _openExp(exp),
-      child: SizedBox(
-        height: 180,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: photos.isNotEmpty
-                  ? Image.network(photos[0], fit: BoxFit.cover, errorBuilder: (_, __, ___) => _gradientBg())
-                  : _gradientBg(),
+  Widget _buildEmpty() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 84, height: 84,
+            decoration: BoxDecoration(
+              color: _kCardBg,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [BoxShadow(color: _kOrange.withValues(alpha: 0.2), blurRadius: 24, spreadRadius: 2)],
             ),
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Colors.black.withOpacity(0.7)],
-                  ),
-                ),
+            child: Center(child: Icon(PhosphorIcons.forkKnife(), size: 42, color: _kTextSec.withValues(alpha: 0.5))),
+          ),
+          const SizedBox(height: 18),
+          Text('لا توجد تجارب بعد', style: _tj(17, FontWeight.w800, Colors.white)),
+          const SizedBox(height: 6),
+          Text('كن أول من يشارك تجربته', style: _tj(13, FontWeight.w400, _kTextSec)),
+          const SizedBox(height: 26),
+          GestureDetector(
+            onTap: () async {
+              await Navigator.of(context).push(_fadeSlideRoute(const AddExperienceScreen()));
+              _loadData();
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [_kOrange, Color(0xFFFF7A1A)]),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [BoxShadow(color: _kOrange.withValues(alpha: 0.45), blurRadius: 18, offset: const Offset(0, 6))],
               ),
+              child: Text('+ أضف تجربة', style: _tj(14, FontWeight.w800, Colors.white)),
             ),
-            Positioned(
-              top: 12, right: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [Color(0xFFC8931A), Color(0xFFE8A820)]),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Text('⭐ الأعلى تقييماً',
-                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Color(0xFF1A2340))),
-              ),
-            ),
-            Positioned(
-              bottom: 12, right: 14, left: 14,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(restName,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Colors.white)),
-                  if (city.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text('📍 $city', style: const TextStyle(fontSize: 10, color: Colors.white70)),
-                  ],
-                  const SizedBox(height: 5),
-                  Row(
-                    children: [
-                      Text(_stars(rating), style: const TextStyle(fontSize: 12, color: Color(0xFFF5D485))),
-                      const SizedBox(width: 6),
-                      Text(rating.toStringAsFixed(1),
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFFF5D485))),
-                      const SizedBox(width: 8),
-                      Container(width: 1, height: 12, color: Colors.white.withOpacity(0.3)),
-                      const SizedBox(width: 8),
-                      Text('🔥 $likes يستاهل',
-                          style: const TextStyle(fontSize: 10, color: Color(0xFFFFB347), fontWeight: FontWeight.w700)),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _gradientBg() => Container(
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF2D1508), Color(0xFF8B3010), Color(0xFFD4521A)],
+  // ── HERO BANNER ────────────────────────────────────────────────────────────
+
+  Widget _buildBanner(Map<String, dynamic> exp) {
+    return AnimatedBuilder(
+      animation: _ambientCtrl,
+      builder: (_, child) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(22, 28, 22, 22),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment(-0.4 + _ambientCtrl.value * 0.4, -1),
+            end: Alignment(0.4 - _ambientCtrl.value * 0.4, 1),
+            colors: [
+              Color.lerp(const Color(0xFF1A2A40), const Color(0xFF1D3055), _ambientCtrl.value)!,
+              Color.lerp(_kDark, const Color(0xFF0F1E2E), _ambientCtrl.value * 0.4)!,
+            ],
+          ),
+        ),
+        child: child,
       ),
-    ),
-    child: const Center(child: Text('🍽️', style: TextStyle(fontSize: 60, color: Colors.white24))),
-  );
+      child: Column(
+        children: [
+          Text('أي شيء', textAlign: TextAlign.center,
+              style: _tj(28, FontWeight.w900, Colors.white, height: 1.1)),
+          const SizedBox(height: 5),
+          Text('بس مو أي مطعم!', textAlign: TextAlign.center,
+              style: _tj(17, FontWeight.w800, _kOrange, height: 1.2)),
+          const SizedBox(height: 16),
+          GestureDetector(
+            onTap: () => setState(() => _currentIndex = 1),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: _kCardBg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 12)],
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(AppStrings.searchHint,
+                        style: _tj(13, FontWeight.w400, _kTextSec),
+                        textDirection: TextDirection.rtl),
+                  ),
+                  Icon(PhosphorIcons.magnifyingGlass(), color: _kTextSec, size: 20),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── MOOD SECTION ──────────────────────────────────────────────────────────
+
+  static const _kMoods = [
+    ('هادئ',             'هادئ'),
+    ('جلسات خارجية',     'جلسات خارجية'),
+    ('شبابي',            'شبابي'),
+    ('رومانسي',          'رومانسي'),
+    ('عائلي',            'عائلي'),
+    ('للعمل',            'للعمل'),
+  ];
+
+  Widget _buildMoodSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+          child: Row(
+            children: [
+              Container(
+                width: 3, height: 16,
+                decoration: BoxDecoration(
+                  color: _kOrange,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(AppStrings.moodToday,
+                  style: _tj(13, FontWeight.w800, Colors.white)),
+              if (_selectedMood != null) ...[
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => setState(() => _selectedMood = null),
+                  child: Text('إلغاء',
+                      style: _tj(11, FontWeight.w600, _kTextSec)),
+                ),
+              ],
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 40,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            itemCount: _kMoods.length,
+            itemBuilder: (context, i) {
+              final label = _kMoods[i].$1;
+              final key   = _kMoods[i].$2;
+              final active = _selectedMood == key;
+              return GestureDetector(
+                onTap: () => setState(
+                    () => _selectedMood = active ? null : key),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: active
+                        ? _kOrange
+                        : Colors.white.withValues(alpha: 0.07),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: active
+                          ? _kOrange
+                          : Colors.white.withValues(alpha: 0.1),
+                      width: 0.8,
+                    ),
+                    boxShadow: active
+                        ? [
+                            BoxShadow(
+                              color: _kOrange.withValues(alpha: 0.45),
+                              blurRadius: 14,
+                              offset: const Offset(0, 4),
+                            )
+                          ]
+                        : [],
+                  ),
+                  child: Text(
+                    label,
+                    style: _tj(
+                      12,
+                      active ? FontWeight.w700 : FontWeight.w500,
+                      active ? Colors.white : _kTextSec,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        if (_selectedMood != null) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Text(
+              'الأفضل في $_selectedMood',
+              style: _tj(12, FontWeight.w700, _kOrange),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // ── CATEGORIES ─────────────────────────────────────────────────────────────
 
   Widget _buildCategories() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: Text('التصنيفات',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E))),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Text('التصنيفات', style: _tj(12, FontWeight.w600, _kTextSec)),
         ),
         SizedBox(
-          height: 70,
+          height: 44,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 12),
             itemCount: _categories.length,
             itemBuilder: (context, i) {
-              final cat = _categories[i];
+              final cat    = _categories[i];
               final active = _selectedCategory == cat;
               return GestureDetector(
                 onTap: () => setState(() => _selectedCategory = cat),
-                child: Container(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
                   margin: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Column(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: active ? _kOrange : _kCardBg,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: active ? _kOrange : Colors.white.withValues(alpha: 0.08),
+                      width: 0.8,
+                    ),
+                    boxShadow: active
+                        ? [BoxShadow(color: _kOrange.withValues(alpha: 0.38), blurRadius: 14, offset: const Offset(0, 4))]
+                        : [],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 46, height: 46,
-                        decoration: BoxDecoration(
-                          color: active ? const Color(0xFF1A2340) : Colors.white,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: active ? const Color(0xFF1A2340) : const Color(0xFFE4D9CE)),
-                          boxShadow: active
-                              ? [BoxShadow(color: const Color(0xFF1A2340).withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 3))]
-                              : [],
-                        ),
-                        child: Center(child: Text(_catIcons[i], style: const TextStyle(fontSize: 20))),
-                      ),
-                      const SizedBox(height: 4),
+                      Icon(_catIcons[i], size: 13, color: active ? Colors.white : _kTextSec),
+                      const SizedBox(width: 5),
                       Text(cat,
-                          style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: active ? FontWeight.w800 : FontWeight.w500,
-                              color: active ? const Color(0xFF1A2340) : const Color(0xFF7A6655))),
+                          style: _tj(12, active ? FontWeight.w700 : FontWeight.w500,
+                              active ? Colors.white : _kTextSec)),
                     ],
                   ),
                 ),
@@ -340,164 +941,276 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildExpCard(Map<String, dynamic> exp) {
-    final rating = _avgRating(exp);
+  // ── GRID CARD (2-column) ──────────────────────────────────────────────────
+
+  Widget _buildGridCard(Map<String, dynamic> exp) {
+    final rating   = _avgRating(exp);
     final restName = exp['restaurant']?['name_ar'] ?? 'مطعم';
-    final city = exp['restaurant']?['city'] ?? '';
-    final userName = exp['user']?['display_name'] ?? 'مستخدم';
-    final likes = exp['likes_count'] ?? 0;
-    final photos = exp['photos'] as List? ?? [];
+    final likes    = exp['likes_count'] ?? 0;
+    final photos   = exp['photos'] as List? ?? [];
+    final title    = (exp['title'] as String? ?? '').trim();
+    final desc     = (exp['description'] as String? ?? '').trim();
+    final preview  = title.isNotEmpty ? title : desc;
+    final expId    = exp['id']?.toString();
 
     return GestureDetector(
+      onTapDown: (_) => setState(() => _pressedCardId = expId),
+      onTapUp: (_) => setState(() => _pressedCardId = null),
+      onTapCancel: () => setState(() => _pressedCardId = null),
       onTap: () => _openExp(exp),
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      child: AnimatedScale(
+        scale: _pressedCardId == expId ? 0.97 : 1.0,
+        duration: const Duration(milliseconds: 150),
+        child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _kCardBg,
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 10, offset: const Offset(0, 2))],
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.32), blurRadius: 12, offset: const Offset(0, 4)),
+          ],
         ),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
-              child: SizedBox(
-                height: 120,
-                width: double.infinity,
-                child: photos.isNotEmpty
-                    ? Image.network(photos[0], fit: BoxFit.cover, errorBuilder: (_, __, ___) => _placeholderImg())
-                    : _placeholderImg(),
+            // ── Photo ──────────────────────────────────────────────────────
+            Expanded(
+              flex: 6,
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    photos.isNotEmpty
+                        ? kIsWeb
+                            ? CachedNetworkImage(
+                                imageUrl: photos[0].toString(),
+                                fit: BoxFit.cover,
+                                placeholder: (_, __) => const ColoredBox(color: _kCardBg),
+                                errorWidget: (_, __, ___) => _placeholderImg(),
+                              )
+                            : AnimatedBuilder(
+                                animation: _scrollController,
+                                builder: (_, child) {
+                                  final parallax = _scrollController.hasClients
+                                      ? -(_scrollController.offset * 0.08).clamp(0.0, 14.0)
+                                      : 0.0;
+                                  return Transform.translate(
+                                    offset: Offset(0, parallax),
+                                    child: child,
+                                  );
+                                },
+                                child: CachedNetworkImage(
+                                  imageUrl: photos[0].toString(),
+                                  fit: BoxFit.cover,
+                                  placeholder: (_, __) => const ColoredBox(color: _kCardBg),
+                                  errorWidget: (_, __, ___) => _placeholderImg(),
+                                ),
+                              )
+                        : _placeholderImg(),
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.transparent, Colors.black.withValues(alpha: 0.88)],
+                            stops: const [0.28, 1.0],
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Rating badge top-right
+                    if (rating > 0)
+                      Positioned(
+                        top: 8, right: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: _kGold,
+                            borderRadius: BorderRadius.circular(8),
+                            boxShadow: [BoxShadow(color: _kGold.withValues(alpha: 0.4), blurRadius: 6)],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(PhosphorIcons.star(PhosphorIconsStyle.fill), size: 9, color: Colors.white),
+                              const SizedBox(width: 2),
+                              Text(rating.toStringAsFixed(1),
+                                  style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w800)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    // يستاهل badge top-left
+                    Positioned(
+                      top: 8, left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(PhosphorIcons.flame(PhosphorIconsStyle.fill), size: 9, color: _kOrange),
+                            const SizedBox(width: 2),
+                            Text('$likes', style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    // Title overlay at bottom of photo
+                    if (preview.isNotEmpty)
+                      Positioned(
+                        bottom: 8, left: 8, right: 8,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 32, height: 3,
+                              decoration: BoxDecoration(
+                                color: _kOrange,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            const SizedBox(height: 5),
+                            _styledTitle(preview),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 10,
-                        backgroundColor: const Color(0xFFF26500),
-                        child: Text(userName.isNotEmpty ? userName[0] : 'م',
-                            style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w800)),
+
+            // ── Info below photo ───────────────────────────────────────────
+            Expanded(
+              flex: 3,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(9, 8, 9, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      restName,
+                      style: _tj(12, FontWeight.w800, Colors.white, height: 1.2),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if ((exp['visit_time'] as String?) != null &&
+                        (exp['visit_time'] as String).isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        exp['visit_time'].toString(),
+                        style: _tj(9, FontWeight.w500, _kTextSec),
                       ),
-                      const SizedBox(width: 6),
-                      Text(userName,
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF1A1A2E))),
-                      const Spacer(),
-                      Text(_timeAgo(exp['created_at']),
-                          style: const TextStyle(fontSize: 8, color: Color(0xFF94A3B8))),
                     ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(restName,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF1A1A2E))),
-                  if (city.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text('📍 $city', style: const TextStyle(fontSize: 9, color: Color(0xFF7A6655))),
-                  ],
-                  if (rating > 0) ...[
-                    const SizedBox(height: 4),
+                    const Spacer(),
                     Row(
                       children: [
-                        Text(_stars(rating), style: const TextStyle(fontSize: 11, color: Color(0xFFC8931A))),
-                        const SizedBox(width: 4),
-                        Text(rating.toStringAsFixed(1),
-                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1A1A2E))),
+                        Icon(PhosphorIcons.flame(PhosphorIconsStyle.fill), size: 9, color: _kOrange),
+                        const SizedBox(width: 3),
+                        Text('$likes ${AppStrings.worthIt}', style: _tj(9, FontWeight.w600, _kTextSec)),
                       ],
                     ),
                   ],
-                  if (exp['description'] != null) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      exp['description'].toString().length > 80
-                          ? '${exp['description'].toString().substring(0, 80)}...'
-                          : exp['description'].toString(),
-                      style: const TextStyle(fontSize: 10, color: Color(0xFF7A6655), height: 1.5),
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      _actionBtn('🔥 يستاهل · $likes', true),
-                      const SizedBox(width: 8),
-                      _actionBtn('💬 تعليق', false),
-                      const Spacer(),
-                      _actionBtn('📍 أود زيارته', false),
-                    ],
-                  ),
-                ],
+                ),
               ),
             ),
           ],
+        ),
         ),
       ),
     );
   }
 
   Widget _placeholderImg() => Container(
-    height: 120,
     decoration: const BoxDecoration(
-      gradient: LinearGradient(colors: [Color(0xFF1A2340), Color(0xFF2A3A5C)]),
+      gradient: LinearGradient(colors: [_kDark, Color(0xFF162030)]),
     ),
-    child: const Center(child: Text('🍽️', style: TextStyle(fontSize: 40))),
+    child: Center(child: Icon(PhosphorIcons.forkKnife(), size: 36, color: _kTextSec.withValues(alpha: 0.4))),
   );
 
-  Widget _actionBtn(String label, bool primary) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: primary ? const Color(0xFFFEF0E6) : const Color(0xFFFAF5EE),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: primary ? const Color(0xFFF26500).withOpacity(0.3) : const Color(0xFFE4D9CE)),
+  Widget _styledTitle(String text, {double fontSize = 11.0}) {
+    final words = text.trim().split(' ');
+    final firstWord = words.isNotEmpty ? words.first : '';
+    final rest = words.length > 1 ? words.sublist(1).join(' ') : '';
+    return RichText(
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      textDirection: TextDirection.rtl,
+      text: TextSpan(
+        style: GoogleFonts.tajawal(
+          fontSize: fontSize,
+          fontWeight: FontWeight.w700,
+          shadows: const [
+            Shadow(color: Color(0xCC000000), blurRadius: 8, offset: Offset(0, 2)),
+          ],
+        ),
+        children: [
+          const TextSpan(text: '❝ ', style: TextStyle(color: _kOrange)),
+          TextSpan(text: firstWord, style: const TextStyle(color: _kOrange)),
+          if (rest.isNotEmpty)
+            TextSpan(text: ' $rest', style: const TextStyle(color: Colors.white)),
+          const TextSpan(text: ' ❞', style: TextStyle(color: _kOrange)),
+        ],
       ),
-      child: Text(label,
-          style: TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w700,
-              color: primary ? const Color(0xFFF26500) : const Color(0xFF7A6655))),
     );
   }
 
+  // ── BOTTOM NAVIGATION ──────────────────────────────────────────────────────
+
+  PhosphorIconData _navIcon(int index, bool active) {
+    final s = active ? PhosphorIconsStyle.fill : PhosphorIconsStyle.regular;
+    switch (index) {
+      case 0:  return PhosphorIcons.house(s);
+      case 1:  return PhosphorIcons.magnifyingGlass(s);
+      case 3:  return PhosphorIcons.bell(s);
+      default: return PhosphorIcons.user(s);
+    }
+  }
+
   Widget _buildBottomNav() {
-    final items = [
-      [Icons.home_rounded, 'الرئيسية'],
-      [Icons.search_rounded, 'بحث'],
-      [null, ''],
-      [Icons.notifications_outlined, 'إشعارات'],
-      [Icons.person_outline_rounded, 'حسابي'],
+    final labels = [
+      AppStrings.home,
+      AppStrings.explore,
+      '',
+      AppStrings.notifications,
+      AppStrings.profile,
     ];
 
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Color(0xFFE4D9CE))),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111C2B),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.55), blurRadius: 24, offset: const Offset(0, -4)),
+          BoxShadow(color: _kOrange.withValues(alpha: 0.05), blurRadius: 32, offset: const Offset(0, -10)),
+        ],
+        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.07), width: 0.6)),
       ),
       child: SafeArea(
         top: false,
         child: SizedBox(
-          height: 60,
+          height: 64,
           child: Row(
-            children: List.generate(items.length, (i) {
+            children: List.generate(labels.length, (i) {
               if (i == 2) {
                 return Expanded(
                   child: GestureDetector(
                     onTap: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const AddExperienceScreen()),
-                      );
+                      await Navigator.of(context).push(_fadeSlideRoute(const AddExperienceScreen()));
                       _loadData();
                     },
                     child: Center(
                       child: Container(
-                        width: 46, height: 46,
+                        width: 50, height: 50,
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(colors: [Color(0xFFF26500), Color(0xFFFF7A1A)]),
-                          borderRadius: BorderRadius.circular(23),
-                          boxShadow: [BoxShadow(color: const Color(0xFFF26500).withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4))],
+                          gradient: const LinearGradient(colors: [_kOrange, Color(0xFFFF7A1A)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [BoxShadow(color: _kOrange.withValues(alpha: 0.5), blurRadius: 18, offset: const Offset(0, 4))],
                         ),
-                        child: const Icon(Icons.add, color: Colors.white, size: 24),
+                        child: const Icon(Icons.add_rounded, color: Colors.white, size: 26),
                       ),
                     ),
                   ),
@@ -507,25 +1220,75 @@ class _HomeScreenState extends State<HomeScreen> {
               return Expanded(
                 child: GestureDetector(
                   onTap: () {
-  if (i == 4) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const ProfileScreen()),
-    );
-  } else {
-    setState(() => _currentIndex = i);
-  }
-},
+                    setState(() {
+                      _currentIndex = i;
+                      if (i == 3) _unreadCount = 0;
+                    });
+                    if (i == 4) _profileRefreshNotifier.value++;
+                  },
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(items[i][0] as IconData, size: 22,
-                          color: active ? const Color(0xFFF26500) : const Color(0xFF94A3B8)),
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: active ? _kOrange.withValues(alpha: 0.13) : Colors.transparent,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: AnimatedScale(
+                              scale: active ? 1.1 : 1.0,
+                              duration: const Duration(milliseconds: 200),
+                              curve: Curves.easeOutCubic,
+                              child: Icon(_navIcon(i, active), size: 24, color: active ? _kOrange : _kTextSec),
+                            ),
+                          ),
+                          if (i == 3 && _unreadCount > 0)
+                            Positioned(
+                              top: -3, right: -4,
+                              child: AnimatedBuilder(
+                                animation: _notifPulse,
+                                builder: (_, __) => Transform.scale(
+                                  scale: _notifPulse.value,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                                    decoration: BoxDecoration(
+                                      color: _kOrange,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(color: const Color(0xFF111C2B), width: 1.5),
+                                      boxShadow: [BoxShadow(color: _kOrange.withValues(alpha: 0.6), blurRadius: 4)],
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        _unreadCount > 9 ? '9+' : '$_unreadCount',
+                                        style: _tj(9, FontWeight.w800, Colors.white),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
                       const SizedBox(height: 2),
-                      Text(items[i][1] as String,
-                          style: TextStyle(
-                              fontSize: 8,
-                              fontWeight: active ? FontWeight.w800 : FontWeight.w400,
-                              color: active ? const Color(0xFFF26500) : const Color(0xFF94A3B8))),
+                      Text(labels[i],
+                          style: _tj(9, active ? FontWeight.w700 : FontWeight.w400, active ? _kOrange : _kTextSec)),
+                      const SizedBox(height: 3),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        width: active ? 4 : 0,
+                        height: active ? 4 : 0,
+                        decoration: BoxDecoration(
+                          color: _kOrange,
+                          shape: BoxShape.circle,
+                          boxShadow: active ? [BoxShadow(color: _kOrange.withValues(alpha: 0.6), blurRadius: 5)] : [],
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -536,4 +1299,118 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  // ── PAGE TRANSITION ────────────────────────────────────────────────────────
+
+  PageRoute<T> _fadeSlideRoute<T>(Widget screen) => PageRouteBuilder<T>(
+    transitionDuration: const Duration(milliseconds: 300),
+    pageBuilder: (_, __, ___) => screen,
+    transitionsBuilder: (_, animation, __, child) {
+      if (kIsWeb) return FadeTransition(opacity: animation, child: child);
+      return FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.03),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+          child: child,
+        ),
+      );
+    },
+  );
+
+  // ── SHIMMER LOADING ────────────────────────────────────────────────────────
+
+  Widget _buildShimmerGrid() {
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(14, 80, 14, 0),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 0.62,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (_, __) => _buildShimmerCard(),
+              childCount: 6,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildShimmerCard() {
+    return AnimatedBuilder(
+      animation: _shimmerController,
+      builder: (_, __) {
+        final t = _shimmerController.value;
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            gradient: LinearGradient(
+              begin: Alignment(t * 4 - 2, 0),
+              end: Alignment(t * 4, 0),
+              colors: const [
+                Color(0xFF1E2D45),
+                Color(0xFF243558),
+                Color(0xFF1E2D45),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Staggered card animation ───────────────────────────────────────────────────
+
+class _AnimatedCard extends StatefulWidget {
+  final Widget child;
+  final Duration delay;
+  const _AnimatedCard({required this.child, required this.delay});
+
+  @override
+  State<_AnimatedCard> createState() => _AnimatedCardState();
+}
+
+class _AnimatedCardState extends State<_AnimatedCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _opacity;
+  late Animation<Offset> _offset;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _opacity = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic);
+    _offset = Tween<Offset>(
+      begin: const Offset(0, 0.075),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    Future.delayed(widget.delay, () {
+      if (mounted) _ctrl.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+        opacity: _opacity,
+        child: SlideTransition(position: _offset, child: widget.child),
+      );
 }
