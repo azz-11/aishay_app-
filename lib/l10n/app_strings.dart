@@ -126,9 +126,11 @@ class AppStrings {
 
   // ── Experience detail ───────────────────────────────────────────────────
   static String get deleteExperience => isArabic ? 'حذف التجربة' : 'Delete Experience';
+  static String get editExperience => isArabic ? 'تعديل التجربة' : 'Edit Experience';
+  static String get deleteExperienceQ => isArabic ? 'حذف التجربة؟' : 'Delete experience?';
   static String get deleteConfirm => isArabic
-      ? 'هل أنت متأكد أنك تريد حذف هذه التجربة؟ لا يمكن التراجع عن هذا الإجراء.'
-      : 'Are you sure you want to delete this experience? This action cannot be undone.';
+      ? 'لا يمكن التراجع عن هذا الإجراء'
+      : 'This action cannot be undone.';
   static String get deleteFailed => isArabic ? 'فشل الحذف' : 'Failed to delete';
   static String get cantOpenMap => isArabic ? 'لا يمكن فتح الخريطة' : 'Cannot open the map';
 

@@ -141,7 +141,7 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
         child: AlertDialog(
           backgroundColor: _kCardBg,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text(AppStrings.deleteExperience, style: _tj(15, FontWeight.w800, Colors.white)),
+          title: Text(AppStrings.deleteExperienceQ, style: _tj(15, FontWeight.w800, Colors.white)),
           content: Text(
             AppStrings.deleteConfirm,
             style: _tj(13, FontWeight.w400, _kTextSec, height: 1.5),
@@ -458,19 +458,12 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
             }),
           ),
 
-          // ── FLOATING OWNER BUTTONS (top-left over photo) ──────────────────
+          // ── FLOATING OWNER MENU (top-left over photo) ─────────────────────
           if (_isOwner)
             Positioned(
               top: MediaQuery.of(context).padding.top + 10,
               left: 14,
-              child: Row(
-                children: [
-                  _appBarAction(PhosphorIcons.pencilSimple(), _openEditExperience),
-                  const SizedBox(width: 8),
-                  _appBarAction(PhosphorIcons.trash(), _deleteExperience,
-                      iconColor: Colors.red.shade300),
-                ],
-              ),
+              child: _appBarAction(PhosphorIcons.dotsThreeVertical(), _showOwnerMenu),
             ),
         ],
       ),
@@ -1045,6 +1038,79 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
       Text(title, style: _tj(14, FontWeight.w800, Colors.white)),
     ],
   );
+
+  void _showOwnerMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kDark2,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 10),
+              // drag handle
+              Container(
+                width: 32,
+                height: 3,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 10),
+              _ownerMenuRow(
+                icon: PhosphorIcons.pencilSimple(),
+                label: AppStrings.editExperience,
+                color: Colors.white,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openEditExperience();
+                },
+              ),
+              Divider(height: 1, color: Colors.white.withValues(alpha: 0.08)),
+              _ownerMenuRow(
+                icon: PhosphorIcons.trash(),
+                label: AppStrings.deleteExperience,
+                color: Colors.red.shade300,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _deleteExperience();
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _ownerMenuRow({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) =>
+      InkWell(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 52),
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 14),
+              Text(label, style: _tj(14, FontWeight.w600, color)),
+            ],
+          ),
+        ),
+      );
 
   Widget _appBarAction(IconData icon, VoidCallback onTap, {Color? iconColor}) =>
       GestureDetector(
