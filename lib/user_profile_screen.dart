@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'experience_detail_screen.dart';
+import 'widgets/app_placeholder.dart';
 
 const _upDark    = Color(0xFF0F1923);
 const _upDark2   = Color(0xFF1A2340);
@@ -461,9 +462,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         imageUrl: photos[0].toString(),
                         fit: BoxFit.cover,
                         placeholder: (_, __) => const ColoredBox(color: _upCardBg),
-                        errorWidget: (_, __, ___) => _placeholder(),
+                        errorWidget: (_, __, ___) =>
+                            AppPlaceholder(name: restName, borderRadius: 0),
                       )
-                    : _placeholder(),
+                    : AppPlaceholder(name: restName, borderRadius: 0),
               ),
             ),
             Expanded(
@@ -534,10 +536,4 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     ),
   );
 
-  Widget _placeholder() => Container(
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(colors: [_upDark, _upDark2]),
-    ),
-    child: const Center(child: Text('🍽️', style: TextStyle(fontSize: 24))),
-  );
 }

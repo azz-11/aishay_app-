@@ -10,6 +10,7 @@ import 'experience_detail_screen.dart';
 import 'settings_screen.dart';
 import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
+import 'widgets/app_placeholder.dart';
 
 // ── Design tokens (match home & detail screens)
 const _kDark    = Color(0xFF0F1923);
@@ -539,9 +540,15 @@ class _ProfileScreenState extends State<ProfileScreen>
                             imageUrl: photos[0].toString(),
                             fit: BoxFit.cover,
                             placeholder: (_, __) => const ColoredBox(color: _kDark2),
-                            errorWidget: (_, __, ___) => _placeholderSmall(),
+                            errorWidget: (_, __, ___) => AppPlaceholder(
+                              name: (exp['restaurant']?['name_ar'] ?? exp['title'] ?? '').toString(),
+                              borderRadius: 0,
+                            ),
                           )
-                        : _placeholderSmall(),
+                        : AppPlaceholder(
+                            name: (exp['restaurant']?['name_ar'] ?? exp['title'] ?? '').toString(),
+                            borderRadius: 0,
+                          ),
                   ),
                 ),
 
@@ -642,9 +649,15 @@ class _ProfileScreenState extends State<ProfileScreen>
                             imageUrl: photos[0].toString(),
                             fit: BoxFit.cover,
                             placeholder: (_, __) => const ColoredBox(color: _kDark2),
-                            errorWidget: (_, __, ___) => _placeholderSmall(),
+                            errorWidget: (_, __, ___) => AppPlaceholder(
+                              name: (exp['restaurant']?['name_ar'] ?? exp['title'] ?? '').toString(),
+                              borderRadius: 0,
+                            ),
                           )
-                        : _placeholderSmall(),
+                        : AppPlaceholder(
+                            name: (exp['restaurant']?['name_ar'] ?? exp['title'] ?? '').toString(),
+                            borderRadius: 0,
+                          ),
                   ),
                 ),
                 Expanded(
@@ -858,12 +871,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     ),
   );
 
-  Widget _placeholderSmall() => Container(
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(colors: [_kDark2, _kCardBg]),
-    ),
-    child: Center(child: Icon(PhosphorIcons.forkKnife(), size: 24, color: _kTextSec.withValues(alpha: 0.4))),
-  );
 }
 
 class _TabDelegate extends SliverPersistentHeaderDelegate {

@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'add_experience_screen.dart' deferred as add_exp;
 import 'app_locale.dart';
 import 'l10n/app_strings.dart';
+import 'widgets/app_placeholder.dart';
 import 'experience_detail_screen.dart';
 import 'notifications_screen.dart' deferred as notif;
 import 'profile_screen.dart' deferred as profile;
@@ -1042,7 +1043,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 imageUrl: photos[0].toString(),
                                 fit: BoxFit.cover,
                                 placeholder: (_, __) => const ColoredBox(color: _kCardBg),
-                                errorWidget: (_, __, ___) => _placeholderImg(),
+                                errorWidget: (_, __, ___) => _placeholderImg(restName),
                               )
                             : AnimatedBuilder(
                                 animation: _scrollController,
@@ -1059,10 +1060,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   imageUrl: photos[0].toString(),
                                   fit: BoxFit.cover,
                                   placeholder: (_, __) => const ColoredBox(color: _kCardBg),
-                                  errorWidget: (_, __, ___) => _placeholderImg(),
+                                  errorWidget: (_, __, ___) => _placeholderImg(restName),
                                 ),
                               )
-                        : _placeholderImg(),
+                        : _placeholderImg(restName),
                     Positioned.fill(
                       child: Container(
                         decoration: BoxDecoration(
@@ -1181,12 +1182,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _placeholderImg() => Container(
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(colors: [_kDark, Color(0xFF162030)]),
-    ),
-    child: Center(child: Icon(PhosphorIcons.forkKnife(), size: 36, color: _kTextSec.withValues(alpha: 0.4))),
-  );
+  Widget _placeholderImg(String name) =>
+      AppPlaceholder(name: name, borderRadius: 0);
 
   Widget _styledTitle(String text, {double fontSize = 11.0}) {
     final words = text.trim().split(' ');

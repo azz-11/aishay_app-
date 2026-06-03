@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'experience_detail_screen.dart';
 import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
+import 'widgets/app_placeholder.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kDark    = Color(0xFF0F1923);
@@ -603,17 +604,7 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
         child: Row(
           children: [
-            Container(
-              width: 52, height: 52,
-              decoration: BoxDecoration(
-                color: _kDark2,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: _kOrange.withValues(alpha: 0.35)),
-              ),
-              child: Center(
-                child: Icon(PhosphorIcons.forkKnife(), size: 24, color: _kOrange.withValues(alpha: 0.7)),
-              ),
-            ),
+            AppPlaceholder(name: name, width: 52, height: 52, borderRadius: 14),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -762,9 +753,10 @@ class _SearchScreenState extends State<SearchScreen> {
                             imageUrl: photos[0].toString(),
                             fit: BoxFit.cover,
                             placeholder: (_, __) => const ColoredBox(color: _kCardBg),
-                            errorWidget: (_, __, ___) => _placeholder(),
+                            errorWidget: (_, __, ___) =>
+                                AppPlaceholder(name: restName, borderRadius: 0),
                           )
-                        : _placeholder(),
+                        : AppPlaceholder(name: restName, borderRadius: 0),
 
                     // Gradient overlay
                     Positioned.fill(
@@ -928,12 +920,6 @@ class _SearchScreenState extends State<SearchScreen> {
     ),
   );
 
-  Widget _placeholder() => Container(
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(colors: [_kDark, _kDark2]),
-    ),
-    child: Center(child: Icon(PhosphorIcons.forkKnife(), size: 36, color: _kTextSec.withValues(alpha: 0.4))),
-  );
 }
 
 class _TabSpec {

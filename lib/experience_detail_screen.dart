@@ -11,6 +11,7 @@ import 'comments_section.dart';
 import 'edit_experience_screen.dart';
 import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
+import 'widgets/app_placeholder.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kDark    = Color(0xFF0F1923);
@@ -493,17 +494,26 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
                               imageUrl: photos[index].toString(),
                               fit: BoxFit.cover,
                               placeholder: (_, __) => const ColoredBox(color: _kCardBg),
-                              errorWidget: (_, __, ___) => _placeholder(),
+                              errorWidget: (_, __, ___) => AppPlaceholder(
+                                name: (_experience['restaurant']?['name_ar'] ?? '').toString(),
+                                borderRadius: 0,
+                              ),
                             ),
                           )
                         : CachedNetworkImage(
                             imageUrl: photos[index].toString(),
                             fit: BoxFit.cover,
                             placeholder: (_, __) => const ColoredBox(color: _kCardBg),
-                            errorWidget: (_, __, ___) => _placeholder(),
+                            errorWidget: (_, __, ___) => AppPlaceholder(
+                              name: (_experience['restaurant']?['name_ar'] ?? '').toString(),
+                              borderRadius: 0,
+                            ),
                           ),
                   )
-                : _placeholder(),
+                : AppPlaceholder(
+                    name: (_experience['restaurant']?['name_ar'] ?? '').toString(),
+                    borderRadius: 0,
+                  ),
 
             // Bottom gradient fade into dark
             Positioned(
@@ -986,17 +996,30 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
                               width: 80, height: 80,
                               child: ColoredBox(color: _kDark2),
                             ),
-                            errorWidget: (_, __, ___) => Container(
+                            errorWidget: (_, __, ___) => SizedBox(
                               width: 80, height: 80,
-                              color: _kDark2,
-                              child: Center(child: Icon(PhosphorIcons.forkKnife(), size: 22, color: _kTextSec)),
+                              child: FittedBox(
+                                fit: BoxFit.cover,
+                                child: AppPlaceholder(
+                                  name: (d['name'] ?? '').toString(),
+                                  width: 80, height: 80, borderRadius: 0,
+                                ),
+                              ),
                             ),
                           ),
                         )
-                      : Container(
-                          width: 80, height: 80,
-                          color: _kDark2,
-                          child: Center(child: Icon(PhosphorIcons.forkKnife(), size: 26, color: _kTextSec)),
+                      : ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: SizedBox(
+                            width: 80, height: 80,
+                            child: FittedBox(
+                              fit: BoxFit.cover,
+                              child: AppPlaceholder(
+                                name: (d['name'] ?? '').toString(),
+                                width: 80, height: 80, borderRadius: 0,
+                              ),
+                            ),
+                          ),
                         ),
                 ),
                 const SizedBox(width: 12),
@@ -1127,19 +1150,6 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
       );
 
   Widget _sectionGap() => Container(height: 6, color: _kDark);
-
-  Widget _placeholder() => Container(
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [_kDark, Color(0xFF162030)],
-      ),
-    ),
-    child: Center(
-      child: Icon(PhosphorIcons.forkKnife(), size: 60, color: Colors.white12),
-    ),
-  );
 }
 
 // ── Floating "+1" feedback on like ────────────────────────────────────────────
