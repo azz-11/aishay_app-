@@ -577,6 +577,13 @@ class _SearchScreenState extends State<SearchScreen> {
     final category = rest['category'] as String? ?? '';
     final rating   = (rest['avg_rating'] as num?)?.toDouble() ?? 0.0;
 
+    // (1) Split the comma-separated category string into individual values.
+    final categories = category
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
     return GestureDetector(
       onTap: () {
         // Jump to the التجارب tab filtered by this restaurant.
@@ -623,41 +630,74 @@ class _SearchScreenState extends State<SearchScreen> {
                       ],
                     ),
                   ],
-                  Row(
-                    children: [
-                      if (category.isNotEmpty) ...[
-                        const SizedBox(height: 5),
-                        Container(
-                          margin: const EdgeInsets.only(top: 5),
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: _kOrange.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(category, style: _tj(10, FontWeight.w600, _kOrange)),
-                        ),
-                      ],
-                      if (rating > 0) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          margin: const EdgeInsets.only(top: 5),
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: _kGold.withValues(alpha: 0.18),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
+                  // (2)+(3)+(4) categories + rating: Wrap (never overflows), max 2
+                  // chips + "+N", each chip ellipsised & width-capped, whole block
+                  // capped to leave room for the "عرض التجارب" column.
+                  if (categories.isNotEmpty || rating > 0) ...[
+                    const SizedBox(height: 5),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final capped = constraints.maxWidth - 80;
+                        final maxBlock = capped > 0 ? capped : constraints.maxWidth;
+
+                        final visible = categories.take(2).toList();
+                        final extra = categories.length - visible.length;
+
+                        return ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: maxBlock),
+                          child: Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              Icon(PhosphorIcons.star(PhosphorIconsStyle.fill), size: 10, color: _kGold),
-                              const SizedBox(width: 3),
-                              Text(rating.toStringAsFixed(1), style: _tj(10, FontWeight.w700, _kGold)),
+                              for (final c in visible)
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 100),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: _kOrange.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      c,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: _tj(10, FontWeight.w600, _kOrange),
+                                    ),
+                                  ),
+                                ),
+                              if (extra > 0)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: _kOrange.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text('+$extra', style: _tj(10, FontWeight.w700, _kOrange)),
+                                ),
+                              if (rating > 0)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: _kGold.withValues(alpha: 0.18),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(PhosphorIcons.star(PhosphorIconsStyle.fill), size: 10, color: _kGold),
+                                      const SizedBox(width: 3),
+                                      Text(rating.toStringAsFixed(1), style: _tj(10, FontWeight.w700, _kGold)),
+                                    ],
+                                  ),
+                                ),
                             ],
                           ),
-                        ),
-                      ],
-                    ],
-                  ),
+                        );
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),
