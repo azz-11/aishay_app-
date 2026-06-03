@@ -88,7 +88,22 @@ class _RegisterScreenState extends State<RegisterScreen>
     });
 
     try {
-      // إنشاء الحساب
+      // Step 1 — validate the invite (does NOT consume it).
+      debugPrint('[register] validate_invite "${widget.inviteCode}"...');
+      final valid = await Supabase.instance.client
+          .rpc('validate_invite', params: {'p_code': widget.inviteCode});
+      debugPrint('[register] validate_invite → $valid');
+      if (valid != true) {
+        if (mounted) {
+          setState(() {
+            _error = 'الكود غير صالح أو مستخدم';
+            _loading = false;
+          });
+        }
+        return;
+      }
+
+      // Step 2 — create the account (the code stays unused if this fails).
       debugPrint('[register] calling auth.signUp...');
       final res = await Supabase.instance.client.auth.signUp(
         email: email,
@@ -96,35 +111,40 @@ class _RegisterScreenState extends State<RegisterScreen>
       );
       debugPrint('[register] signUp returned: user=${res.user?.id}, '
           'session=${res.session != null}');
-
-      if (res.user != null) {
-        // تحديث رمز الدعوة كمستخدم (.select() so we can see what RLS allowed)
-        debugPrint('[register] updating invitation_codes is_used=true for "${widget.inviteCode}"...');
-        final codeUpdate = await Supabase.instance.client
-            .from('invitation_codes')
-            .update({'is_used': true})
-            .eq('code', widget.inviteCode)
-            .select();
-        debugPrint('[register] invitation_codes update result: $codeUpdate');
-
-        // Upsert (not insert): a DB trigger already creates the users row on
-        // signUp, so a plain insert collides on the primary key. Upsert updates
-        // that row instead of erroring.
-        debugPrint('[register] upserting users row for ${res.user!.id}...');
-        final userUpsert = await Supabase.instance.client.from('users').upsert({
-          'id': res.user!.id,
-          'display_name': name,
-          'username': username,
-          'language': 'ar',
-        }, onConflict: 'id').select();
-        debugPrint('[register] users upsert result: $userUpsert');
-
-        debugPrint('[register] success → advancing to step 2');
-        if (mounted) setState(() => _step = 2);
-      } else {
-        debugPrint('[register] signUp returned null user '
+      if (res.user == null) {
+        debugPrint('[register] signUp returned null user — NOT consuming code '
             '(email confirmation likely required — no session yet)');
+        return; // finally resets _loading
       }
+
+      // Step 3 — consume the code now that the account exists.
+      debugPrint('[register] consume_invite "${widget.inviteCode}"...');
+      final consumed = await Supabase.instance.client
+          .rpc('consume_invite', params: {'p_code': widget.inviteCode});
+      debugPrint('[register] consume_invite → $consumed');
+      if (consumed != true) {
+        // Lost a race: the code was used between validate and consume. Roll back
+        // the just-created session and stop.
+        debugPrint('[register] consume failed — signing out and aborting');
+        await Supabase.instance.client.auth.signOut();
+        if (mounted) {
+          setState(() => _error = 'حدث خطأ أثناء التسجيل، يرجى المحاولة مرة أخرى');
+        }
+        return;
+      }
+
+      // Step 4 — upsert profile row (a DB trigger may have already created it).
+      debugPrint('[register] upserting users row for ${res.user!.id}...');
+      final userUpsert = await Supabase.instance.client.from('users').upsert({
+        'id': res.user!.id,
+        'display_name': name,
+        'username': username,
+        'language': 'ar',
+      }, onConflict: 'id').select();
+      debugPrint('[register] users upsert result: $userUpsert');
+
+      debugPrint('[register] success → advancing to step 2');
+      if (mounted) setState(() => _step = 2);
     } on AuthException catch (e) {
       debugPrint('[register] AuthException: ${e.message}');
       if (mounted) setState(() => _error = e.message);
@@ -197,14 +217,17 @@ class _RegisterScreenState extends State<RegisterScreen>
           }).select();
           debugPrint('[google] users insert result: $userInsert');
 
-          // Mark the invite code as used for this new Google account.
-          debugPrint('[google] updating invitation_codes for "${widget.inviteCode}"...');
-          final codeUpdate = await Supabase.instance.client
-              .from('invitation_codes')
-              .update({'is_used': true})
-              .eq('code', widget.inviteCode)
-              .select();
-          debugPrint('[google] invitation_codes update result: $codeUpdate');
+          // Validate + consume the invite for this new Google account (via the
+          // SECURITY DEFINER RPCs, since invitation_codes is now RLS-locked).
+          debugPrint('[google] validate_invite "${widget.inviteCode}"...');
+          final valid = await Supabase.instance.client
+              .rpc('validate_invite', params: {'p_code': widget.inviteCode});
+          debugPrint('[google] validate_invite → $valid');
+          if (valid == true) {
+            final consumed = await Supabase.instance.client
+                .rpc('consume_invite', params: {'p_code': widget.inviteCode});
+            debugPrint('[google] consume_invite → $consumed');
+          }
         }
       }
 

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'register_screen.dart';
 
 class InviteScreen extends StatefulWidget {
@@ -46,59 +45,32 @@ class _InviteScreenState extends State<InviteScreen>
     super.dispose();
   }
 
-  Future<void> _checkCode() async {
+  void _checkCode() {
     final code = _codeController.text.trim().toUpperCase();
     debugPrint('[invite] _checkCode tapped, code="$code"');
+
     if (code.isEmpty) {
       setState(() => _error = 'أدخل رمز الدعوة');
       _shakeCtrl.forward(from: 0);
       return;
     }
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      debugPrint('[invite] querying invitation_codes for "$code"...');
-      final res = await Supabase.instance.client
-          .from('invitation_codes')
-          .select()
-          .eq('code', code)
-          .eq('is_used', false)
-          .maybeSingle();
-      debugPrint('[invite] query returned: $res');
-
-      if (!mounted) return;
-      if (res == null) {
-        debugPrint('[invite] code invalid or already used');
-        setState(() => _error = 'الرمز غير صحيح أو مستخدم مسبقاً');
-        _shakeCtrl.forward(from: 0);
-      } else {
-        debugPrint('[invite] code valid → navigating to RegisterScreen');
-        setState(() => _success = true);
-        await Future.delayed(const Duration(milliseconds: 800));
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            PageRouteBuilder(
-              pageBuilder: (_, __, ___) =>
-                  RegisterScreen(inviteCode: code),
-              transitionsBuilder: (_, anim, __, child) =>
-                  FadeTransition(opacity: anim, child: child),
-              transitionDuration: const Duration(milliseconds: 500),
-            ),
-          );
-        }
-      }
-    } catch (e, st) {
-      // Surface the real failure (visible in Safari Web Inspector for the PWA).
-      debugPrint('[invite] ERROR checking code: $e');
-      debugPrint('$st');
-      if (mounted) setState(() => _error = 'تعذّر التحقق من الرمز: $e');
-    } finally {
-      if (mounted) setState(() => _loading = false);
+    // Format check only — the code is validated AND consumed server-side at the
+    // registration step (validate_invite / consume_invite RPCs), never here.
+    if (!RegExp(r'^AISHAY-[A-Z0-9]+$').hasMatch(code)) {
+      setState(() => _error = 'صيغة الرمز غير صحيحة');
+      _shakeCtrl.forward(from: 0);
+      return;
     }
+
+    setState(() => _error = null);
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => RegisterScreen(inviteCode: code),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+        transitionDuration: const Duration(milliseconds: 500),
+      ),
+    );
   }
 
   @override

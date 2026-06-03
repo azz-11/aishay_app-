@@ -103,15 +103,44 @@ CREATE POLICY "anyone can read restaurants" ON restaurants FOR SELECT USING (tru
 CREATE POLICY "authenticated users can insert restaurants" ON restaurants FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 
 -- ── invitation_codes ──────────────────────────────────────────────────────────
--- The invite screen (unauthenticated) SELECTs by code; register UPDATEs is_used.
--- SELECT/UPDATE are open (USING true) because the invite screen runs before the
--- user has a session. NOTE: this lets anyone flip is_used — acceptable for an
--- invite gate, but tighten with a SECURITY DEFINER RPC if abuse is a concern.
+-- Locked down: RLS ON with NO policies → all direct client access is denied
+-- (fixes the "publicly accessible" warning — clients can no longer dump or flip
+-- codes). Access goes ONLY through the SECURITY DEFINER functions below, which
+-- run as the owner and bypass RLS.
 ALTER TABLE invitation_codes ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "anyone can read invitation_codes" ON invitation_codes;
 DROP POLICY IF EXISTS "anyone can update invitation_codes" ON invitation_codes;
-CREATE POLICY "anyone can read invitation_codes" ON invitation_codes FOR SELECT USING (true);
-CREATE POLICY "anyone can update invitation_codes" ON invitation_codes FOR UPDATE USING (true);
+
+-- validate_invite: checks a code exists and is unused; does NOT consume it.
+-- Called from the email registration form (caller is anon, pre-signUp).
+CREATE OR REPLACE FUNCTION validate_invite(p_code text)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM invitation_codes
+    WHERE code = p_code AND is_used = false
+  );
+END $$;
+
+-- consume_invite: marks the code used; called ONLY after a successful signUp.
+-- Returns false if the code was already used (e.g. a race) so the app can roll back.
+CREATE OR REPLACE FUNCTION consume_invite(p_code text)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public AS $$
+DECLARE ok boolean;
+BEGIN
+  UPDATE invitation_codes SET is_used = true
+  WHERE code = p_code AND is_used = false
+  RETURNING true INTO ok;
+  RETURN coalesce(ok, false);
+END $$;
+
+-- The email form runs pre-login (anon); consume runs post-signUp (authenticated).
+-- Grant both to anon + authenticated. Note: this lets a client probe a SPECIFIC
+-- code's validity / mark a KNOWN code used, but NOT enumerate the table.
+GRANT EXECUTE ON FUNCTION validate_invite(text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION consume_invite(text)  TO anon, authenticated;
 
 -- ============================================================================
 -- STORAGE policies (buckets: avatars, photos)
