@@ -321,13 +321,29 @@ class _ProfileScreenState extends State<ProfileScreen>
                                       maxLines: 1, overflow: TextOverflow.ellipsis),
                                   if (username.isNotEmpty || city.toString().isNotEmpty) ...[
                                     const SizedBox(height: 2),
-                                    Text(
-                                      [
-                                        if (username.isNotEmpty) '@$username',
-                                        if (city.toString().isNotEmpty) '📍 $city',
-                                      ].join('  ·  '),
-                                      style: _tj(12, color: _kTextSec),
-                                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (username.isNotEmpty)
+                                          Flexible(
+                                            child: Text('@$username',
+                                                style: _tj(12, color: _kTextSec),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis),
+                                          ),
+                                        if (username.isNotEmpty && city.toString().isNotEmpty)
+                                          Text('  ·  ', style: _tj(12, color: _kTextSec)),
+                                        if (city.toString().isNotEmpty)
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                                                  size: 11, color: _kTextSec),
+                                              const SizedBox(width: 3),
+                                              Text(city, style: _tj(12, color: _kTextSec)),
+                                            ],
+                                          ),
+                                      ],
                                     ),
                                   ],
                                   const SizedBox(height: 10),
