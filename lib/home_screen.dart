@@ -210,7 +210,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       'rating_ambiance, rating_clean, rating_value, atmosphere, price_range, '
       'visit_time, tags, created_at, user_id, restaurant_id, '
       'restaurant:restaurants(id, name_ar, city, category), '
-      'user:users!experiences_user_id_fkey(display_name, avatar_url)';
+      'user:users!experiences_user_id_fkey(display_name, username, avatar_url)';
 
   // ── Warm-start prefetch (kicked off by SplashScreen) ────────────────────────
   static Future<List<Map<String, dynamic>>>? _prefetchFuture;

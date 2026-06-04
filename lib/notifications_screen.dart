@@ -1,10 +1,10 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'experience_detail_screen.dart';
 import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
+import 'widgets/app_avatar.dart';
 
 const _kDark = Color(0xFF0F1923);
 const _kDark2 = Color(0xFF1A2340);
@@ -85,7 +85,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       if (fromIds.isNotEmpty) {
         final usersRes = await Supabase.instance.client
             .from('users')
-            .select('id, display_name, avatar_url')
+            .select('id, display_name, username, avatar_url')
             .inFilter('id', fromIds);
         final usersMap = <String, Map<String, dynamic>>{};
         for (final u in usersRes as List) {
@@ -170,7 +170,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       try {
         final exp = await Supabase.instance.client
             .from('experiences')
-            .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, avatar_url)')
+            .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, username, avatar_url)')
             .eq('id', experienceId)
             .single();
         if (mounted) {
@@ -367,23 +367,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               ),
             ),
             // Avatar
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _kDark2,
-                border: Border.all(color: _kOrange, width: 1.5),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: avatar != null
-                  ? CachedNetworkImage(
-                      imageUrl: avatar,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) => const ColoredBox(color: _kDark2),
-                      errorWidget: (_, __, ___) => _initial(name),
-                    )
-                  : _initial(name),
+            AppAvatar(
+              displayName: name,
+              username: (fromUser?['username'] ?? '').toString(),
+              avatarUrl: avatar,
+              size: 44,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -428,13 +416,4 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
-  Widget _initial(String name) => Center(
-        child: Text(
-          name.isNotEmpty ? name[0] : 'م',
-          style: GoogleFonts.tajawal(
-              fontSize: 16,
-              fontWeight: FontWeight.w900,
-              color: _kOrange),
-        ),
-      );
 }

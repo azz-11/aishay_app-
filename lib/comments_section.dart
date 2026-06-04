@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'widgets/app_avatar.dart';
 
 const _cDark    = Color(0xFF0F1923);
 const _cDark2   = Color(0xFF1A2340);
@@ -50,7 +51,7 @@ class _CommentsSectionState extends State<CommentsSection> {
     try {
       final res = await Supabase.instance.client
           .from('comments')
-          .select('*, user:users(display_name, avatar_url)')
+          .select('*, user:users(display_name, username, avatar_url)')
           .eq('experience_id', widget.experienceId)
           .order('created_at', ascending: true);
       if (mounted) {
@@ -79,7 +80,7 @@ class _CommentsSectionState extends State<CommentsSection> {
             'user_id': user.id,
             'content': text,
           })
-          .select('*, user:users(display_name, avatar_url)')
+          .select('*, user:users(display_name, username, avatar_url)')
           .single();
 
       if (mounted) {
@@ -266,25 +267,11 @@ class _CommentsSectionState extends State<CommentsSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Avatar
-          Container(
-            width: 32, height: 32,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _cOrange.withValues(alpha: 0.15),
-              border: Border.all(
-                color: _cOrange.withValues(alpha: 0.4),
-                width: 1.2,
-              ),
-            ),
-            child: avatar != null
-                ? ClipOval(
-                    child: Image.network(
-                      avatar,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _initial(name),
-                    ),
-                  )
-                : _initial(name),
+          AppAvatar(
+            displayName: name,
+            username: (user?['username'] ?? '').toString(),
+            avatarUrl: avatar,
+            size: 32,
           ),
           const SizedBox(width: 10),
           // Bubble
@@ -328,10 +315,4 @@ class _CommentsSectionState extends State<CommentsSection> {
     );
   }
 
-  Widget _initial(String name) => Center(
-    child: Text(
-      name.isNotEmpty ? name[0].toUpperCase() : 'م',
-      style: _ct(12, weight: FontWeight.w900, color: _cOrange),
-    ),
-  );
 }

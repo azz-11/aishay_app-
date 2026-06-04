@@ -8,6 +8,7 @@ import 'experience_detail_screen.dart';
 import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
 import 'widgets/app_placeholder.dart';
+import 'widgets/app_avatar.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kDark    = Color(0xFF0F1923);
@@ -25,7 +26,7 @@ const _kExpSelect =
     'id, title, description, photos, rating_food, rating_service, '
     'rating_ambiance, rating_clean, rating_value, '
     'restaurant:restaurants(name_ar, city), '
-    'user:users!experiences_user_id_fkey(display_name, avatar_url)';
+    'user:users!experiences_user_id_fkey(display_name, username, avatar_url)';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -493,24 +494,11 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
         child: Row(
           children: [
-            Container(
-              width: 50, height: 50,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _kDark2,
-                border: Border.all(color: _kOrange, width: 2),
-                boxShadow: [BoxShadow(color: _kOrange.withValues(alpha: 0.25), blurRadius: 10)],
-              ),
-              child: avatar != null
-                  ? ClipOval(
-                      child: CachedNetworkImage(
-                        imageUrl: avatar,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => const ColoredBox(color: _kDark2),
-                        errorWidget: (_, __, ___) => _initial(name),
-                      ),
-                    )
-                  : _initial(name),
+            AppAvatar(
+              displayName: name,
+              username: (user['username'] ?? '').toString(),
+              avatarUrl: avatar,
+              size: 50,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -858,19 +846,11 @@ class _SearchScreenState extends State<SearchScreen> {
                   // User avatar + name
                   Row(
                     children: [
-                      Container(
-                        width: 22, height: 22,
-                        decoration: const BoxDecoration(shape: BoxShape.circle, color: _kDark2),
-                        child: userAvatar != null
-                            ? ClipOval(
-                                child: CachedNetworkImage(
-                                  imageUrl: userAvatar,
-                                  fit: BoxFit.cover,
-                                  placeholder: (_, __) => const ColoredBox(color: _kDark2),
-                                  errorWidget: (_, __, ___) => _initial(userName),
-                                ),
-                              )
-                            : _initial(userName),
+                      AppAvatar(
+                        displayName: userName,
+                        username: (exp['user']?['username'] ?? '').toString(),
+                        avatarUrl: userAvatar,
+                        size: 22,
                       ),
                       const SizedBox(width: 7),
                       Text('${AppStrings.by} $userName',
@@ -913,12 +893,6 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
-  Widget _initial(String name) => Center(
-    child: Text(
-      name.isNotEmpty ? name[0].toUpperCase() : 'م',
-      style: _tj(18, FontWeight.w900, _kOrange),
-    ),
-  );
 
 }
 

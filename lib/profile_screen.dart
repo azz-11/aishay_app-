@@ -11,6 +11,7 @@ import 'settings_screen.dart';
 import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
 import 'widgets/app_placeholder.dart';
+import 'widgets/app_avatar.dart';
 
 // ── Design tokens (match home & detail screens)
 const _kDark    = Color(0xFF0F1923);
@@ -42,8 +43,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   static List<Map<String, dynamic>> _cachedSaved = [];
 
   late TabController _tabController;
-  late AnimationController _statsAnim;
-  late Animation<double> _statsProgress;
   Map<String, dynamic>? _profile;
   List<Map<String, dynamic>> _experiences = [];
   List<Map<String, dynamic>> _saved = [];
@@ -57,8 +56,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() => setState(() {}));
-    _statsAnim = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
-    _statsProgress = CurvedAnimation(parent: _statsAnim, curve: Curves.easeOutCubic);
     widget.refreshNotifier?.addListener(_onRefreshTriggered);
     _loadFollowCounts();
     // Show cached data instantly, then refresh in background
@@ -80,7 +77,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   void dispose() {
     widget.refreshNotifier?.removeListener(_onRefreshTriggered);
-    _statsAnim.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -99,13 +95,13 @@ class _ProfileScreenState extends State<ProfileScreen>
 
       final experiences = await Supabase.instance.client
           .from('experiences')
-          .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, avatar_url)')
+          .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, username, avatar_url)')
           .eq('user_id', user.id)
           .order('created_at', ascending: false);
 
       final savedRes = await Supabase.instance.client
           .from('saves')
-          .select('*, experience:experiences(*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, avatar_url))')
+          .select('*, experience:experiences(*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, username, avatar_url))')
           .eq('user_id', user.id);
 
       final expList   = List<Map<String, dynamic>>.from(experiences);
@@ -122,7 +118,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         _avatarVersion++;
       });
       await _loadFollowCounts();
-      if (!silent) _statsAnim.forward(from: 0);
     } catch (e) {
       debugPrint('Profile error: $e');
       setState(() => _loading = false);
@@ -259,12 +254,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     final avatar = _profile?['avatar_url'];
 
     final expCount = _experiences.length;
-    final restaurants = _experiences.map((e) => e['restaurant_id']).toSet().length;
-    final cities = _experiences
-        .map((e) => e['restaurant']?['city'])
-        .where((c) => c != null && c.toString().isNotEmpty)
-        .toSet()
-        .length;
 
     return Scaffold(
       backgroundColor: _kDark,
@@ -305,90 +294,81 @@ class _ProfileScreenState extends State<ProfileScreen>
                         ],
                       ),
 
-                      const SizedBox(height: 26),
+                      const SizedBox(height: 16),
 
-                      // Centered avatar + info
-                      Center(
-                        child: Column(
+                      // ── Header row: avatar on the right (forced RTL), info left
+                      Directionality(
+                        textDirection: TextDirection.rtl,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            // Avatar with orange glow
-                            Container(
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: _kOrange.withValues(alpha: 0.35),
-                                    blurRadius: 22,
-                                    spreadRadius: 2,
+                            AppAvatar(
+                              displayName: displayName,
+                              username: username,
+                              avatarUrl:
+                                  avatar != null ? '$avatar?v=$_avatarVersion' : null,
+                              size: 72,
+                              showGlow: true,
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(displayName,
+                                      style: _tj(16, weight: FontWeight.w900),
+                                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  if (username.isNotEmpty || city.toString().isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      [
+                                        if (username.isNotEmpty) '@$username',
+                                        if (city.toString().isNotEmpty) '📍 $city',
+                                      ].join('  ·  '),
+                                      style: _tj(12, color: _kTextSec),
+                                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                  const SizedBox(height: 10),
+                                  // Inline stats: followers · following · experiences
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _headerStat(_followersCount, AppStrings.followers,
+                                          onTap: () => _showFollowList(isFollowers: true)),
+                                      _headerStatDivider(),
+                                      _headerStat(_followingCount, AppStrings.following,
+                                          onTap: () => _showFollowList(isFollowers: false)),
+                                      _headerStatDivider(),
+                                      _headerStat(expCount, AppStrings.experiences),
+                                    ],
                                   ),
                                 ],
                               ),
-                              child: Container(
-                                width: 86, height: 86,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: _kOrange, width: 2.5),
-                                  color: _kDark2,
-                                ),
-                                child: avatar != null
-                                    ? ClipOval(
-                                        child: CachedNetworkImage(
-                                          imageUrl: '$avatar?v=$_avatarVersion',
-                                          fit: BoxFit.cover,
-                                          placeholder: (_, __) => const ColoredBox(color: _kDark2),
-                                          errorWidget: (_, __, ___) => Center(
-                                            child: Text(
-                                              displayName.isNotEmpty ? displayName[0].toUpperCase() : 'م',
-                                              style: _tj(34, weight: FontWeight.w900, color: _kOrange),
-                                            ),
-                                          ),
-                                        ),
-                                      )
-                                    : Center(
-                                        child: Text(
-                                          displayName.isNotEmpty ? displayName[0].toUpperCase() : 'م',
-                                          style: _tj(34, weight: FontWeight.w900, color: _kOrange),
-                                        ),
-                                      ),
-                              ),
                             ),
-
-                            const SizedBox(height: 14),
-
-                            Text(displayName, style: _tj(19, weight: FontWeight.w900)),
-
-                            if (username.isNotEmpty) ...[
-                              const SizedBox(height: 3),
-                              Text('@$username', style: _tj(12, color: _kTextSec)),
-                            ],
-
-                            if (city.isNotEmpty) ...[
-                              const SizedBox(height: 6),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill), color: _kTextSec, size: 13),
-                                  const SizedBox(width: 3),
-                                  Text(city, style: _tj(11, color: _kTextSec)),
-                                ],
-                              ),
-                            ],
-
-                            if (bio.isNotEmpty) ...[
-                              const SizedBox(height: 10),
-                              Text(
-                                bio,
-                                style: _tj(12, color: const Color(0xFFCBD5E1), height: 1.7),
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
                           ],
                         ),
                       ),
 
-                      const SizedBox(height: 20),
+                      // Bio (optional, start-aligned)
+                      if (bio.toString().isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Directionality(
+                          textDirection: TextDirection.rtl,
+                          child: Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: Text(
+                              bio,
+                              style: _tj(12, color: const Color(0xFFCBD5E1), height: 1.5),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 12),
 
                       // Edit profile button
                       GestureDetector(
@@ -406,42 +386,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                                 style: _tj(13, weight: FontWeight.w700)),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // ── STATS ROW
-                Container(
-                  color: _kDark2,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  child: Column(
-                    children: [
-                      // Social stats row
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _stat(_followersCount, AppStrings.followers,
-                              onTap: () => _showFollowList(isFollowers: true),
-                              animated: false),
-                          _divider(),
-                          _stat(_followingCount, AppStrings.following,
-                              onTap: () => _showFollowList(isFollowers: false),
-                              animated: false),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Container(height: 0.5, color: Colors.white.withValues(alpha: 0.07)),
-                      const SizedBox(height: 10),
-                      // Content stats row
-                      Row(
-                        children: [
-                          _stat(expCount, AppStrings.experiences),
-                          _divider(),
-                          _stat(restaurants, AppStrings.restaurants),
-                          _divider(),
-                          _stat(cities, AppStrings.cities),
-                        ],
                       ),
                     ],
                   ),
@@ -811,53 +755,29 @@ class _ProfileScreenState extends State<ProfileScreen>
     ),
   );
 
-  Widget _stat(num rawValue, String label, {VoidCallback? onTap, bool animated = true}) => Expanded(
-    child: GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          if (animated)
-            AnimatedBuilder(
-              animation: _statsProgress,
-              builder: (_, __) {
-                final display = _statsProgress.isCompleted
-                    ? rawValue.round()
-                    : (rawValue * _statsProgress.value).round();
-                return Text(
-                  '$display',
-                  style: _tj(20, weight: FontWeight.w900, color: _kOrange),
-                );
-              },
-            )
-          else
-            Text(
-              '${rawValue.round()}',
-              style: _tj(20, weight: FontWeight.w900, color: _kOrange),
-            ),
-          const SizedBox(height: 3),
-          Text(label,
-              style: _tj(10,
-                  weight: FontWeight.w600,
-                  color: onTap != null ? Colors.white70 : _kTextSec)),
-          if (onTap != null) ...[
-            const SizedBox(height: 2),
-            Container(
-              width: 16, height: 1.5,
-              decoration: BoxDecoration(
-                color: _kOrange.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(1),
-              ),
-            ),
+  // Compact inline stat for the header row (orange number + muted label).
+  Widget _headerStat(num value, String label, {VoidCallback? onTap}) =>
+      GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${value.round()}',
+                style: _tj(14, weight: FontWeight.w900, color: _kOrange)),
+            const SizedBox(height: 1),
+            Text(label, style: _tj(10, color: _kTextSec)),
           ],
-        ],
-      ),
-    ),
-  );
+        ),
+      );
 
-  Widget _divider() => Container(
-    width: 1, height: 36,
-    color: Colors.white.withValues(alpha: 0.1),
-  );
+  Widget _headerStatDivider() => Container(
+        width: 1,
+        height: 26,
+        margin: const EdgeInsets.symmetric(horizontal: 12),
+        color: Colors.white.withValues(alpha: 0.08),
+      );
 
   Widget _iconBtn(IconData icon, VoidCallback onTap) => GestureDetector(
     onTap: onTap,
@@ -1093,22 +1013,11 @@ class _FollowListSheetState extends State<_FollowListSheet> {
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Row(
           children: [
-            Container(
-              width: 46, height: 46,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _kDark,
-                border: Border.all(color: _kOrange, width: 1.5),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: avatar != null
-                  ? CachedNetworkImage(
-                      imageUrl: avatar,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) => const ColoredBox(color: _kDark),
-                      errorWidget: (_, __, ___) => _initial(name),
-                    )
-                  : _initial(name),
+            AppAvatar(
+              displayName: name,
+              username: username,
+              avatarUrl: avatar,
+              size: 46,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -1151,10 +1060,4 @@ class _FollowListSheetState extends State<_FollowListSheet> {
     );
   }
 
-  Widget _initial(String name) => Center(
-        child: Text(
-          name.isNotEmpty ? name[0] : 'م',
-          style: _tj(16, weight: FontWeight.w900, color: _kOrange),
-        ),
-      );
 }

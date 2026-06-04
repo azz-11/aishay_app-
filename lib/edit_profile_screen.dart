@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'l10n/app_strings.dart';
+import 'widgets/app_avatar.dart';
 
 const _eDark    = Color(0xFF0F1923);
 const _eDark2   = Color(0xFF1A2340);
@@ -236,9 +237,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                             _avatarUrl!,
                                             fit: BoxFit.cover,
                                             errorBuilder: (_, __, ___) =>
-                                                _initials(displayName),
+                                                AppAvatar(displayName: displayName, username: (widget.profile['username'] ?? '').toString(), size: 91),
                                           )
-                                        : _initials(displayName)),
+                                        : AppAvatar(displayName: displayName, username: (widget.profile['username'] ?? '').toString(), size: 91)),
                               ),
                             ),
                           ),
@@ -387,10 +388,4 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
-  Widget _initials(String name) => Center(
-    child: Text(
-      name.isNotEmpty ? name[0].toUpperCase() : 'م',
-      style: _et(32, weight: FontWeight.w900, color: _eOrange),
-    ),
-  );
 }

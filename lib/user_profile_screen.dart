@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'experience_detail_screen.dart';
 import 'widgets/app_placeholder.dart';
+import 'widgets/app_avatar.dart';
 
 const _upDark    = Color(0xFF0F1923);
 const _upDark2   = Color(0xFF1A2340);
@@ -129,7 +130,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
       final experiences = await Supabase.instance.client
           .from('experiences')
-          .select('*, restaurant:restaurants(*)')
+          .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, username, avatar_url)')
           .eq('user_id', widget.userId)
           .order('created_at', ascending: false);
 
@@ -248,43 +249,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     ],
                   ),
                   const SizedBox(height: 18),
-                  // Avatar with orange gradient ring
-                  Container(
-                    width: 90, height: 90,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [_upOrange, Color(0xFFFF7A1A)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _upOrange.withValues(alpha: 0.35),
-                          blurRadius: 22,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(2.5),
-                      child: Container(
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _upDark2,
-                        ),
-                        child: ClipOval(
-                          child: avatar != null
-                              ? CachedNetworkImage(
-                                  imageUrl: avatar,
-                                  fit: BoxFit.cover,
-                                  placeholder: (_, __) => const ColoredBox(color: _upDark2),
-                                  errorWidget: (_, __, ___) => _initial(displayName),
-                                )
-                              : _initial(displayName),
-                        ),
-                      ),
-                    ),
+                  // Avatar
+                  AppAvatar(
+                    displayName: displayName,
+                    username: username,
+                    avatarUrl: avatar,
+                    size: 90,
+                    showGlow: true,
                   ),
                   const SizedBox(height: 14),
                   Text(displayName, style: _upt(19, weight: FontWeight.w900)),
@@ -529,11 +500,5 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     color: Colors.white.withValues(alpha: 0.1),
   );
 
-  Widget _initial(String name) => Center(
-    child: Text(
-      name.isNotEmpty ? name[0].toUpperCase() : 'م',
-      style: _upt(28, weight: FontWeight.w900, color: _upOrange),
-    ),
-  );
 
 }

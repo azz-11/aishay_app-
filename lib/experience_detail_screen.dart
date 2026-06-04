@@ -12,6 +12,7 @@ import 'edit_experience_screen.dart';
 import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
 import 'widgets/app_placeholder.dart';
+import 'widgets/app_avatar.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kDark    = Color(0xFF0F1923);
@@ -218,7 +219,7 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
     try {
       final res = await Supabase.instance.client
           .from('experiences')
-          .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, avatar_url)')
+          .select('*, restaurant:restaurants(*), user:users!experiences_user_id_fkey(display_name, username, avatar_url)')
           .eq('id', _experience['id'])
           .single();
       if (mounted) {
@@ -614,35 +615,11 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 28, height: 28,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                        colors: [_kOrange, Color(0xFFFF7A1A)]),
-                  ),
-                  child: exp['user']?['avatar_url'] != null
-                      ? ClipOval(
-                          child: CachedNetworkImage(
-                            imageUrl: exp['user']['avatar_url'].toString(),
-                            fit: BoxFit.cover,
-                            placeholder: (_, __) => const ColoredBox(color: _kDark2),
-                            errorWidget: (_, __, ___) => Center(
-                              child: Text(
-                                userName.isNotEmpty ? userName[0] : 'م',
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800),
-                              ),
-                            ),
-                          ),
-                        )
-                      : Center(
-                          child: Text(
-                            userName.isNotEmpty ? userName[0] : 'م',
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800),
-                          ),
-                        ),
+                AppAvatar(
+                  displayName: userName,
+                  username: (exp['user']?['username'] ?? '').toString(),
+                  avatarUrl: exp['user']?['avatar_url']?.toString(),
+                  size: 28,
                 ),
                 const SizedBox(width: 8),
                 Text(userName, style: _tj(12, FontWeight.w600, _kTextSec)),
