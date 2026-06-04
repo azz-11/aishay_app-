@@ -12,6 +12,10 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
+  // Process-level guard: the full splash runs ONCE per app open. Any re-mount
+  // (hot reload / MaterialApp rebuild) navigates immediately — no repeat.
+  static bool _completed = false;
+
   late final AnimationController _ctrl;
   late final Animation<double> _fade;
 
@@ -20,24 +24,27 @@ class _SplashScreenState extends State<SplashScreen>
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 500),
+      duration: const Duration(milliseconds: 300), // single fade-in
     )..forward();
     _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
     _boot();
   }
 
   Future<void> _boot() async {
-    // Session is available synchronously once Supabase.initialize() has run.
+    // Session is available synchronously after Supabase.initialize().
     final session = Supabase.instance.client.auth.currentSession;
 
-    // Warm-start the home feed IN PARALLEL with the splash so the data is
-    // (close to) ready by the time we navigate — not fetched only afterwards.
+    // Warm-start the feed in parallel with the splash (idempotent).
     if (session != null) {
       HomeScreen.prefetchFeed();
     }
 
-    // Keep the splash visible for at most ~1s, then navigate.
-    await Future.delayed(const Duration(milliseconds: 900));
+    // First open: 300ms fade-in + 2000ms on-screen = 2300ms, then navigate.
+    // Re-mounts skip the wait so the splash never repeats.
+    if (!_completed) {
+      _completed = true;
+      await Future.delayed(const Duration(milliseconds: 2300));
+    }
     if (!mounted) return;
 
     final next = session != null ? const HomeScreen() : const WelcomeScreen();
@@ -46,7 +53,7 @@ class _SplashScreenState extends State<SplashScreen>
         pageBuilder: (_, __, ___) => next,
         transitionsBuilder: (_, animation, __, child) =>
             FadeTransition(opacity: animation, child: child),
-        transitionDuration: const Duration(milliseconds: 400),
+        transitionDuration: const Duration(milliseconds: 400), // fade-out
       ),
     );
   }
@@ -59,9 +66,9 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Single fade-in screen (merged from the old two phases).
     return Scaffold(
       backgroundColor: const Color(0xFF0F1923),
+      // ONE fade-in for all elements together — no phases, no cross-fade.
       body: FadeTransition(
         opacity: _fade,
         child: Center(
@@ -71,11 +78,11 @@ class _SplashScreenState extends State<SplashScreen>
             children: [
               Image.asset(
                 'assets/images/logo.png',
-                width: 96,
+                width: 110,
                 errorBuilder: (context, error, stackTrace) =>
                     const SizedBox.shrink(),
               ),
-              const SizedBox(height: 22),
+              const SizedBox(height: 24),
               const Text(
                 'أي شيء',
                 textDirection: TextDirection.rtl,
@@ -89,30 +96,27 @@ class _SplashScreenState extends State<SplashScreen>
               ),
               const SizedBox(height: 8),
               const Text(
-                'بس.. مو أي مطعم',
+                'بس مو أي مطعم',
                 textDirection: TextDirection.rtl,
                 style: TextStyle(
                   fontFamily: 'Tajawal',
-                  fontSize: 22,
+                  fontSize: 20,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFFF26500),
+                  color: Colors.white70,
                   decoration: TextDecoration.none,
                 ),
               ),
-              const SizedBox(height: 18),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 40),
-                child: Text(
-                  'عش تجربة المكان قبل زيارته',
-                  textAlign: TextAlign.center,
-                  textDirection: TextDirection.rtl,
-                  style: TextStyle(
-                    fontFamily: 'Tajawal',
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white70,
-                    decoration: TextDecoration.none,
-                  ),
+              const SizedBox(height: 10),
+              const Text(
+                'عش تجربة المكان قبل زيارته',
+                textAlign: TextAlign.center,
+                textDirection: TextDirection.rtl,
+                style: TextStyle(
+                  fontFamily: 'Tajawal',
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xCCF26500),
+                  decoration: TextDecoration.none,
                 ),
               ),
             ],
