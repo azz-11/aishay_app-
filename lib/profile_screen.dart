@@ -12,6 +12,8 @@ import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
 import 'widgets/app_placeholder.dart';
 import 'widgets/app_avatar.dart';
+import 'achievements_screen.dart';
+import 'services/gamification_service.dart';
 
 // ── Design tokens (match home & detail screens)
 const _kDark    = Color(0xFF0F1923);
@@ -51,6 +53,9 @@ class _ProfileScreenState extends State<ProfileScreen>
   int _followersCount = 0;
   int _followingCount = 0;
 
+  final _gamif = GamificationService();
+  List<String> _badgeKeys = [];
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +63,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     _tabController.addListener(() => setState(() {}));
     widget.refreshNotifier?.addListener(_onRefreshTriggered);
     _loadFollowCounts();
+    _loadBadges();
     // Show cached data instantly, then refresh in background
     if (_cachedProfile != null) {
       _profile      = _cachedProfile;
@@ -316,9 +322,19 @@ class _ProfileScreenState extends State<ProfileScreen>
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Text(displayName,
-                                      style: _tj(16, weight: FontWeight.w900),
-                                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  Row(
+                                    children: [
+                                      Flexible(
+                                        child: Text(displayName,
+                                            style: _tj(16, weight: FontWeight.w900),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      _levelPill(
+                                          GamificationService.getLevelInfo(expCount).name),
+                                    ],
+                                  ),
                                   if (username.isNotEmpty || city.toString().isNotEmpty) ...[
                                     const SizedBox(height: 2),
                                     Row(
@@ -383,6 +399,38 @@ class _ProfileScreenState extends State<ProfileScreen>
                           ),
                         ),
                       ],
+
+                      // Top earned badges + "عرض الكل"
+                      const SizedBox(height: 12),
+                      Directionality(
+                        textDirection: TextDirection.rtl,
+                        child: Row(
+                          children: [
+                            for (final k in _badgeKeys.take(2))
+                              if (GamificationService.defFor(k) != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: _badgeChip(GamificationService.defFor(k)!),
+                                ),
+                            const Spacer(),
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _openAchievements,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text('عرض الكل',
+                                      style: _tj(12,
+                                          weight: FontWeight.w700, color: _kOrange)),
+                                  const SizedBox(width: 2),
+                                  Icon(PhosphorIcons.caretLeft(),
+                                      size: 12, color: _kOrange),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
 
                       const SizedBox(height: 12),
 
@@ -770,6 +818,56 @@ class _ProfileScreenState extends State<ProfileScreen>
       ],
     ),
   );
+
+  Future<void> _loadBadges() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    try {
+      final keys = await _gamif.earnedBadgeKeys(user.id);
+      if (mounted) setState(() => _badgeKeys = keys);
+    } catch (e) {
+      debugPrint('Badges load error: $e');
+    }
+  }
+
+  Future<void> _openAchievements() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AchievementsScreen(userId: user.id)),
+    );
+    if (mounted) _loadBadges(); // may have earned new badges on the screen
+  }
+
+  Widget _levelPill(String name) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: _kOrange.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _kOrange.withValues(alpha: 0.4), width: 0.8),
+        ),
+        child: Text(name,
+            style: _tj(10, weight: FontWeight.w800, color: _kOrange),
+            maxLines: 1),
+      );
+
+  Widget _badgeChip(BadgeDef def) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: _kOrange.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kOrange.withValues(alpha: 0.5), width: 0.8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(def.icon(PhosphorIconsStyle.fill), size: 13, color: _kOrange),
+            const SizedBox(width: 4),
+            Text(def.name, style: _tj(10, weight: FontWeight.w700, color: _kOrange)),
+          ],
+        ),
+      );
 
   // Compact inline stat for the header row (orange number + muted label).
   Widget _headerStat(num value, String label, {VoidCallback? onTap}) =>

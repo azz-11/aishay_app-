@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
 import 'security_utils.dart';
 import 'l10n/app_strings.dart';
+import 'services/gamification_service.dart';
 
 const _kSaudiCitiesAdd = [
   'الرياض', 'جدة', 'مكة', 'المدينة',
@@ -282,6 +283,33 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
       }
 
       if (mounted) setState(() => _step = 99);
+
+      // Award cheap (experience-derived) badges; celebrate any new ones.
+      try {
+        final newBadges = await GamificationService()
+            .checkAndAwardBadges(user.id, full: false);
+        if (newBadges.isNotEmpty && mounted) {
+          final msg = newBadges.length == 1
+              ? 'حصلت على شارة جديدة: ${newBadges.first.name}'
+              : 'حصلت على ${newBadges.length} شارات جديدة!';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: _kOrange,
+              duration: const Duration(seconds: 3),
+              content: Row(
+                children: [
+                  Icon(PhosphorIcons.trophy(PhosphorIconsStyle.fill),
+                      color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(msg, style: _tj(13, weight: FontWeight.w700))),
+                ],
+              ),
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint('Badge award error: $e');
+      }
     } catch (e) {
       setState(() => _error = e.toString());
     } finally {
