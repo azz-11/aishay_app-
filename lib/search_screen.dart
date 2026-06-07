@@ -9,6 +9,7 @@ import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
 import 'widgets/app_placeholder.dart';
 import 'widgets/app_avatar.dart';
+import 'widgets/restaurant_card.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kDark    = Color(0xFF0F1923);
@@ -228,9 +229,8 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Future<void> _loadRestaurants(String q) async {
-    final base = Supabase.instance.client
-        .from('restaurants')
-        .select('id, name_ar, city, category, avg_rating');
+    final base = Supabase.instance.client.from('restaurants').select(
+        'id, name_ar, city, category, avg_rating, cover_image, experiences(photos)');
     final res = q.isEmpty
         ? await base.limit(20)
         : await base.ilike('name_ar', '%$q%').limit(20);
@@ -561,137 +561,41 @@ class _SearchScreenState extends State<SearchScreen> {
   // ── RESTAURANT CARD ────────────────────────────────────────────────────────
 
   Widget _buildRestaurantCard(Map<String, dynamic> rest) {
-    final name     = rest['name_ar'] as String? ?? 'مطعم';
-    final city     = rest['city'] as String? ?? '';
-    final category = rest['category'] as String? ?? '';
-    final rating   = (rest['avg_rating'] as num?)?.toDouble() ?? 0.0;
-
-    // (1) Split the comma-separated category string into individual values.
-    final categories = category
-        .split(',')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-
-    return GestureDetector(
+    return RestaurantCard(
+      restaurant: rest,
+      photos: _restaurantPhotos(rest),
       onTap: () {
         // Jump to the التجارب tab filtered by this restaurant.
+        final name = rest['name_ar'] as String? ?? '';
         _ctrl.text = name;
         _debounce?.cancel();
         _searchQuery = name;
         setState(() => _activeTab = 0);
         _loadData();
       },
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: _kCardBg,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 8)],
-        ),
-        child: Row(
-          children: [
-            AppPlaceholder(name: name, width: 52, height: 52, borderRadius: 14),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name, style: _tj(14, FontWeight.w900, Colors.white)),
-                  if (city.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill), size: 11, color: _kTextSec),
-                        const SizedBox(width: 4),
-                        Text(city, style: _tj(11, FontWeight.w400, _kTextSec)),
-                      ],
-                    ),
-                  ],
-                  // (2)+(3)+(4) categories + rating: Wrap (never overflows), max 2
-                  // chips + "+N", each chip ellipsised & width-capped, whole block
-                  // capped to leave room for the "عرض التجارب" column.
-                  if (categories.isNotEmpty || rating > 0) ...[
-                    const SizedBox(height: 5),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final capped = constraints.maxWidth - 80;
-                        final maxBlock = capped > 0 ? capped : constraints.maxWidth;
-
-                        final visible = categories.take(2).toList();
-                        final extra = categories.length - visible.length;
-
-                        return ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: maxBlock),
-                          child: Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              for (final c in visible)
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(maxWidth: 100),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: _kOrange.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      c,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: _tj(10, FontWeight.w600, _kOrange),
-                                    ),
-                                  ),
-                                ),
-                              if (extra > 0)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: _kOrange.withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text('+$extra', style: _tj(10, FontWeight.w700, _kOrange)),
-                                ),
-                              if (rating > 0)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: _kGold.withValues(alpha: 0.18),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(PhosphorIcons.star(PhosphorIconsStyle.fill), size: 10, color: _kGold),
-                                      const SizedBox(width: 3),
-                                      Text(rating.toStringAsFixed(1), style: _tj(10, FontWeight.w700, _kGold)),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Icon(Icons.chevron_right, color: Colors.white.withValues(alpha: 0.3), size: 18),
-                const SizedBox(height: 3),
-                Text(AppStrings.viewExperiences, style: _tj(9, FontWeight.w500, _kTextSec)),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
+  }
+
+  /// Flatten experiences[].photos → dedupe → first 4 (for the collage).
+  List<String> _restaurantPhotos(Map<String, dynamic> rest) {
+    final seen = <String>{};
+    final out = <String>[];
+    final exps = rest['experiences'];
+    if (exps is List) {
+      for (final e in exps) {
+        final photos = (e is Map) ? e['photos'] : null;
+        if (photos is List) {
+          for (final ph in photos) {
+            final url = ph?.toString();
+            if (url != null && url.isNotEmpty && seen.add(url)) {
+              out.add(url);
+              if (out.length >= 4) return out;
+            }
+          }
+        }
+      }
+    }
+    return out;
   }
 
   // ── EXPERIENCE CARD ──────────────────────────────────────────────────────────

@@ -269,6 +269,19 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
             .from('experiences')
             .update({'photos': _imageUrls})
             .eq('id', exp['id']);
+
+        // Set the restaurant cover from the first photo if it has none yet.
+        if (_imageUrls.isNotEmpty && _restaurantId != null) {
+          try {
+            await Supabase.instance.client
+                .from('restaurants')
+                .update({'cover_image': _imageUrls.first})
+                .eq('id', _restaurantId!)
+                .isFilter('cover_image', null);
+          } catch (e) {
+            debugPrint('cover_image update error: $e');
+          }
+        }
       }
 
       if (_dishes.isNotEmpty) {
