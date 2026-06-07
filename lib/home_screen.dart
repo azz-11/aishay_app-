@@ -12,6 +12,7 @@ import 'widgets/app_placeholder.dart';
 import 'experience_detail_screen.dart';
 import 'notifications_screen.dart' deferred as notif;
 import 'profile_screen.dart' deferred as profile;
+import 'map_screen.dart' deferred as map;
 import 'search_screen.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -56,6 +57,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // Deferred-library readiness for the lazily-loaded tabs.
   bool _notifReady = false;
   bool _profileReady = false;
+  bool _mapReady = false;
   bool _shouldAnimateList = true;
   int _page = 0;
   bool _hasMore = true;
@@ -496,6 +498,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     } else if (i == 4 && !_profileReady) {
       await profile.loadLibrary();
       if (mounted) setState(() => _profileReady = true);
+    } else if (i == 5 && !_mapReady) {
+      await map.loadLibrary();
+      if (mounted) setState(() => _mapReady = true);
     }
     if (!mounted) return;
     setState(() {
@@ -624,6 +629,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               _profileReady
                   ? profile.ProfileScreen(refreshNotifier: _profileRefreshNotifier)
                   : const SizedBox(),
+              // 5 — Map (deferred lib; built after first visit)
+              _mapReady ? map.MapScreen() : const SizedBox(),
             ],
           ),
 
@@ -1220,6 +1227,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       case 0:  return PhosphorIcons.house(s);
       case 1:  return PhosphorIcons.magnifyingGlass(s);
       case 3:  return PhosphorIcons.bell(s);
+      case 4:  return PhosphorIcons.user(s);
+      case 5:  return PhosphorIcons.mapPin(s);
       default: return PhosphorIcons.user(s);
     }
   }
@@ -1231,6 +1240,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       '',
       AppStrings.notifications,
       AppStrings.profile,
+      'الخريطة',
     ];
 
     return Container(

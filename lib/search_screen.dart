@@ -30,7 +30,10 @@ const _kExpSelect =
     'user:users!experiences_user_id_fkey(display_name, username, avatar_url)';
 
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({super.key});
+  /// When set, the screen opens pre-filtered by this query on the التجارب tab.
+  final String? initialQuery;
+
+  const SearchScreen({super.key, this.initialQuery});
 
   @override
   State<SearchScreen> createState() => _SearchScreenState();
@@ -55,6 +58,12 @@ class _SearchScreenState extends State<SearchScreen> {
   void initState() {
     super.initState();
     _searchFocus.addListener(() { if (mounted) setState(() {}); });
+    final initial = widget.initialQuery?.trim();
+    if (initial != null && initial.isNotEmpty) {
+      _ctrl.text = initial;
+      _searchQuery = initial;
+      _activeTab = 0; // التجارب
+    }
     _loadMyFollowing();
     _loadData(); // first load → all results for the default tab
   }

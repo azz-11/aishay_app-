@@ -1,5 +1,8 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
@@ -7,6 +10,7 @@ import 'dart:typed_data';
 import 'security_utils.dart';
 import 'l10n/app_strings.dart';
 import 'services/gamification_service.dart';
+import 'utils/map_utils.dart';
 
 const _kSaudiCitiesAdd = [
   'الرياض', 'جدة', 'مكة', 'المدينة',
@@ -95,6 +99,11 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
   String _restaurantCity = '';
   List<Map<String, dynamic>> _searchResults = [];
 
+  // Location (NEW restaurants only) — captured from the mini-map center.
+  final _miniMapController = MapController();
+  double? _lat;
+  double? _lng;
+
   // Dish photos
   Uint8List? _pendingDishPhoto;
   String? _pendingDishPhotoUrl;
@@ -126,7 +135,44 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
     _dishNameCtrl.dispose();
     _dishPriceCtrl.dispose();
     _otherCategoryCtrl.dispose();
+    _miniMapController.dispose();
     super.dispose();
+  }
+
+  Future<void> _useCurrentLocation() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _locationDenied();
+        return;
+      }
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        _locationDenied();
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition();
+      setState(() {
+        _lat = pos.latitude;
+        _lng = pos.longitude;
+      });
+      _miniMapController.move(LatLng(pos.latitude, pos.longitude), 15);
+    } catch (e) {
+      debugPrint('[add_exp] location error: $e');
+      _locationDenied();
+    }
+  }
+
+  void _locationDenied() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content:
+              Text('يرجى السماح بالوصول للموقع', style: GoogleFonts.tajawal())),
+    );
   }
 
   double get _avgRating {
@@ -237,6 +283,8 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
               if (_selectedCategories.isNotEmpty)
                 'category': _selectedCategories.join(','),
               if (_restaurantCity.isNotEmpty) 'city': _restaurantCity,
+              if (_lat != null) 'latitude': _lat,
+              if (_lng != null) 'longitude': _lng,
             })
             .select()
             .single();
@@ -708,6 +756,96 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                       ],
                     ),
                   ),
+
+                // Location picker — only when creating a NEW restaurant.
+                if (_restaurantId == null &&
+                    (_restaurantName ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 22),
+                  _label('📍 موقع المطعم (اختياري)'),
+                  const SizedBox(height: 8),
+                  GestureDetector(
+                    onTap: _useCurrentLocation,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _kOrange.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                              PhosphorIcons.navigationArrow(
+                                  PhosphorIconsStyle.fill),
+                              size: 16,
+                              color: _kOrange),
+                          const SizedBox(width: 8),
+                          Text('موقعي الحالي',
+                              style: _tj(13,
+                                  weight: FontWeight.w800, color: _kOrange)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: SizedBox(
+                      height: 180,
+                      child: Stack(
+                        children: [
+                          FlutterMap(
+                            mapController: _miniMapController,
+                            options: MapOptions(
+                              initialCenter: cityCenter(_restaurantCity.isNotEmpty
+                                  ? _restaurantCity
+                                  : null),
+                              initialZoom: 13,
+                              interactionOptions: const InteractionOptions(
+                                flags:
+                                    InteractiveFlag.all & ~InteractiveFlag.rotate,
+                              ),
+                              onPositionChanged: (camera, hasGesture) {
+                                if (hasGesture) {
+                                  _lat = camera.center.latitude;
+                                  _lng = camera.center.longitude;
+                                }
+                              },
+                            ),
+                            children: [
+                              TileLayer(
+                                urlTemplate:
+                                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                userAgentPackageName: 'com.aishay.app',
+                                tileBuilder: (context, tileWidget, tile) =>
+                                    ColorFiltered(
+                                        colorFilter: kDarkenTiles,
+                                        child: tileWidget),
+                              ),
+                            ],
+                          ),
+                          // Fixed center pin — move the map under it to position.
+                          IgnorePointer(
+                            child: Center(
+                              child: Transform.translate(
+                                offset: const Offset(0, -16),
+                                child: Icon(
+                                    PhosphorIcons.mapPin(
+                                        PhosphorIconsStyle.fill),
+                                    size: 34,
+                                    color: _kOrange),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text('حرّك الخريطة لضبط الموقع، أو اتركه فارغًا للتخطّي',
+                      style: _tj(10, color: _kTextSec)),
+                ],
 
                 const SizedBox(height: 22),
                 _label('⏱️ ${AppStrings.visitTime}'),
