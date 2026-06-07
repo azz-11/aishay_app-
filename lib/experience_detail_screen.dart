@@ -7,6 +7,7 @@ import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'add_visit_screen.dart';
 import 'comments_section.dart';
 import 'edit_experience_screen.dart';
 import 'user_profile_screen.dart';
@@ -253,6 +254,7 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
         }, onConflict: 'user_id,experience_id');
         final ownerId = _experience['user_id']?.toString();
         if (ownerId != null) await _insertNotification(ownerId, user.id, 'save');
+        if (mounted) _showVisitPlanSheet();
       } else {
         await Supabase.instance.client
             .from('saves')
@@ -268,6 +270,95 @@ class _ExperienceDetailScreenState extends State<ExperienceDetailScreen>
         );
       }
     }
+  }
+
+  void _showVisitPlanSheet() {
+    final restaurant = _experience['restaurant'];
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E2D45),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              20, 18, 20, 18 + MediaQuery.of(ctx).padding.bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Row(
+                children: [
+                  Icon(PhosphorIcons.bookmarkSimple(PhosphorIconsStyle.fill),
+                      color: const Color(0xFFF26500), size: 22),
+                  const SizedBox(width: 8),
+                  Text('أُضيف إلى أود زيارته',
+                      style: GoogleFonts.tajawal(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text('هل تريد تحديد موعد للزيارة؟',
+                  style: GoogleFonts.tajawal(
+                      fontSize: 13, color: const Color(0xFF94A3B8))),
+              const SizedBox(height: 18),
+              GestureDetector(
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AddVisitScreen(
+                        restaurant: restaurant is Map
+                            ? Map<String, dynamic>.from(restaurant)
+                            : null,
+                      ),
+                    ),
+                  );
+                },
+                child: Container(
+                  height: 50,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                        colors: [Color(0xFFF26500), Color(0xFFFF7A1A)]),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text('حدّد موعد',
+                      style: GoogleFonts.tajawal(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('لاحقاً',
+                    style: GoogleFonts.tajawal(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF94A3B8))),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadDishes() async {

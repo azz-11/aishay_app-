@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'experience_detail_screen.dart';
 import 'user_profile_screen.dart';
 import 'l10n/app_strings.dart';
+import 'utils/date_format_ar.dart';
 import 'widgets/app_avatar.dart';
 
 const _kDark = Color(0xFF0F1923);
@@ -119,6 +120,44 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           final eid = n['experience_id'];
           if (eid != null && expMap.containsKey(eid)) {
             n['restaurant_name'] = expMap[eid];
+          }
+        }
+      }
+
+      // Batch-fetch visit details (restaurant + date + my response) for invites.
+      final visitIds = notifications
+          .where((n) => n['type'] == 'visit_invite')
+          .map((n) => n['visit_id'])
+          .where((id) => id != null)
+          .toSet()
+          .toList();
+
+      if (visitIds.isNotEmpty) {
+        final visitsRes = await Supabase.instance.client
+            .from('visits')
+            .select('id, visit_date, restaurant:restaurants(name_ar)')
+            .inFilter('id', visitIds);
+        final invitesRes = await Supabase.instance.client
+            .from('visit_invites')
+            .select('visit_id, status')
+            .eq('invitee_id', user.id)
+            .inFilter('visit_id', visitIds);
+
+        final visitMap = <dynamic, Map<String, dynamic>>{};
+        for (final v in visitsRes as List) {
+          visitMap[v['id']] = Map<String, dynamic>.from(v);
+        }
+        final statusMap = <dynamic, String>{};
+        for (final inv in invitesRes as List) {
+          statusMap[inv['visit_id']] = inv['status']?.toString() ?? 'pending';
+        }
+        for (final n in notifications) {
+          final vid = n['visit_id'];
+          if (vid != null && visitMap.containsKey(vid)) {
+            final v = visitMap[vid]!;
+            n['visit_restaurant'] = v['restaurant']?['name_ar']?.toString();
+            n['visit_date_label'] = formatVisitDateStrAr(v['visit_date']?.toString());
+            n['visit_status'] = statusMap[vid] ?? 'pending';
           }
         }
       }
@@ -338,6 +377,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final type = notif['type'] as String? ?? '';
     final restaurantName = notif['restaurant_name'] as String?;
     final time = _timeAgo(notif['created_at'] as String?);
+    final isVisit = type == 'visit_invite';
+    final visitStatus = notif['visit_status'] as String?;
+    final bodyText = isVisit
+        ? 'دعاك لزيارة ${notif['visit_restaurant'] ?? 'مطعم'} يوم ${notif['visit_date_label'] ?? ''}'
+        : _typeText(type, restaurantName);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -394,7 +438,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                   fontWeight: FontWeight.w800)),
                           const TextSpan(text: '  '),
                           TextSpan(
-                              text: _typeText(type, restaurantName),
+                              text: bodyText,
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.8),
                                   fontWeight: FontWeight.w500)),
@@ -405,6 +449,21 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     Text(time,
                         style: GoogleFonts.tajawal(
                             fontSize: 11, color: _kTextSec)),
+                    if (isVisit && visitStatus == 'pending') ...[
+                      const SizedBox(height: 10),
+                      _inviteButtons(notif),
+                    ] else if (isVisit && visitStatus != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        visitStatus == 'accepted' ? 'قبلت الدعوة ✓' : 'اعتذرت',
+                        style: GoogleFonts.tajawal(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: visitStatus == 'accepted'
+                                ? const Color(0xFF22C55E)
+                                : _kTextSec),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -416,4 +475,69 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
+  Widget _inviteButtons(Map<String, dynamic> notif) {
+    return Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            onTap: () => _respondInvite(notif, 'accepted'),
+            child: Container(
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFF22C55E),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text('قبول',
+                  style: GoogleFonts.tajawal(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white)),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: GestureDetector(
+            onTap: () => _respondInvite(notif, 'declined'),
+            child: Container(
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFEF4444), width: 1.2),
+              ),
+              child: Text('رفض',
+                  style: GoogleFonts.tajawal(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFFEF4444))),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _respondInvite(Map<String, dynamic> notif, String status) async {
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    final visitId = notif['visit_id'];
+    if (me == null || visitId == null) return;
+    final prev = notif['visit_status'];
+    setState(() => notif['visit_status'] = status); // optimistic
+    try {
+      await Supabase.instance.client.from('visit_invites').update({
+        'status': status,
+        'responded_at': DateTime.now().toIso8601String(),
+      }).eq('visit_id', visitId).eq('invitee_id', me);
+    } catch (e) {
+      debugPrint('[notifications] respond error: $e');
+      if (mounted) {
+        setState(() => notif['visit_status'] = prev);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تعذّر الإرسال', style: GoogleFonts.tajawal())),
+        );
+      }
+    }
+  }
 }

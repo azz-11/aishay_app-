@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_locale.dart';
 import 'splash_screen.dart';
@@ -21,6 +22,9 @@ Future<void> main() async {
 
   // Use only bundled Tajawal font files — no runtime network fetch
   GoogleFonts.config.allowRuntimeFetching = false;
+
+  // Arabic date symbols for the visit planner calendar (table_calendar).
+  await initializeDateFormatting('ar', null);
 
   // Load secrets from the bundled .env (kept out of source control).
   try {

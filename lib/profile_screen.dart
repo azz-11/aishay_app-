@@ -14,6 +14,8 @@ import 'widgets/app_placeholder.dart';
 import 'widgets/app_avatar.dart';
 import 'achievements_screen.dart';
 import 'services/gamification_service.dart';
+import 'visits_screen.dart';
+import 'widgets/visit_card.dart';
 
 // ── Design tokens (match home & detail screens)
 const _kDark    = Color(0xFF0F1923);
@@ -48,6 +50,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   Map<String, dynamic>? _profile;
   List<Map<String, dynamic>> _experiences = [];
   List<Map<String, dynamic>> _saved = [];
+  List<Map<String, dynamic>> _visits = [];
   bool _loading = true;
   int _avatarVersion = 0;
   int _followersCount = 0;
@@ -59,11 +62,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(() => setState(() {}));
     widget.refreshNotifier?.addListener(_onRefreshTriggered);
     _loadFollowCounts();
     _loadBadges();
+    _loadVisits();
     // Show cached data instantly, then refresh in background
     if (_cachedProfile != null) {
       _profile      = _cachedProfile;
@@ -77,7 +81,56 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   void _onRefreshTriggered() {
-    if (mounted) _loadProfile(silent: true);
+    if (mounted) {
+      _loadProfile(silent: true);
+      _loadVisits();
+    }
+  }
+
+  static const _visitSelect =
+      '*, restaurant:restaurants(id, name_ar, cover_image, city), '
+      'invites:visit_invites(*, invitee:users(id, display_name, username, avatar_url))';
+
+  DateTime _visitDate(Map<String, dynamic> v) {
+    final d = DateTime.tryParse((v['visit_date'] ?? '').toString()) ??
+        DateTime.now();
+    return DateTime(d.year, d.month, d.day);
+  }
+
+  Future<void> _loadVisits() async {
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    if (me == null) return;
+    try {
+      final owned = await Supabase.instance.client
+          .from('visits')
+          .select(_visitSelect)
+          .eq('owner_id', me);
+      final invited = await Supabase.instance.client
+          .from('visit_invites')
+          .select('status, visit:visits($_visitSelect)')
+          .eq('invitee_id', me)
+          .eq('status', 'accepted');
+
+      final byId = <dynamic, Map<String, dynamic>>{};
+      for (final v in owned as List) {
+        final m = Map<String, dynamic>.from(v);
+        m['_isOwner'] = true;
+        byId[m['id']] = m;
+      }
+      for (final row in invited as List) {
+        final v = row['visit'];
+        if (v is Map) {
+          final m = Map<String, dynamic>.from(v);
+          m['_isOwner'] = false;
+          byId.putIfAbsent(m['id'], () => m);
+        }
+      }
+      final list = byId.values.toList()
+        ..sort((a, b) => _visitDate(a).compareTo(_visitDate(b)));
+      if (mounted) setState(() => _visits = list);
+    } catch (e) {
+      debugPrint('[profile] visits load error: $e');
+    }
   }
 
   @override
@@ -476,6 +529,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 tabs: [
                   Tab(text: AppStrings.myExperiences),
                   Tab(text: AppStrings.saved),
+                  const Tab(text: 'مواعيدي'),
                   Tab(text: AppStrings.statistics),
                 ],
               ),
@@ -488,6 +542,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           children: [
             _buildExperiences(),
             _buildSaved(),
+            _buildVisits(),
             _buildStats(),
           ],
         ),
@@ -609,6 +664,68 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
         );
       },
+    );
+  }
+
+  Widget _buildVisits() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+          child: GestureDetector(
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const VisitsScreen()),
+              );
+              _loadVisits();
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: _kOrange.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(PhosphorIcons.calendarBlank(), size: 16, color: _kOrange),
+                  const SizedBox(width: 8),
+                  Text('عرض التقويم',
+                      style: _tj(13, weight: FontWeight.w800, color: _kOrange)),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: _visits.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(PhosphorIcons.calendarBlank(),
+                          size: 52, color: _kTextSec.withValues(alpha: 0.4)),
+                      const SizedBox(height: 14),
+                      Text('لا مواعيد بعد',
+                          style: _tj(14, weight: FontWeight.w800)),
+                      const SizedBox(height: 6),
+                      Text('خطّط لزيارتك القادمة',
+                          style: _tj(12, color: _kTextSec)),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(14),
+                  itemCount: _visits.length,
+                  itemBuilder: (_, i) => VisitCard(
+                    visit: _visits[i],
+                    isOwner: _visits[i]['_isOwner'] == true,
+                    onChanged: _loadVisits,
+                  ),
+                ),
+        ),
+      ],
     );
   }
 
