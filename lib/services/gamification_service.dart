@@ -36,6 +36,20 @@ class BadgeStatus {
   const BadgeStatus(this.def, this.earned, this.progress);
 }
 
+/// Everything the achievements screen needs from one computation pass.
+class AchievementsData {
+  final List<BadgeDef> newlyEarned; // for the celebration
+  final List<BadgeStatus> earned;
+  final List<BadgeStatus> locked;
+  final int experienceCount; // for the level
+  const AchievementsData({
+    required this.newlyEarned,
+    required this.earned,
+    required this.locked,
+    required this.experienceCount,
+  });
+}
+
 class GamificationService {
   final SupabaseClient _db;
   GamificationService([SupabaseClient? client])
@@ -148,7 +162,7 @@ class GamificationService {
   /// adds the heavy cross-table badges — used on the achievements screen.
   Future<List<BadgeDef>> checkAndAwardBadges(String userId,
       {bool full = false}) async {
-    final progress = await _computeProgress(userId, full: full);
+    final progress = (await _computeProgress(userId, full: full)).progress;
     final met = progress.entries
         .where((e) => e.value >= 1.0)
         .map((e) => e.key)
@@ -172,12 +186,39 @@ class GamificationService {
     return catalog.where((b) => toAward.contains(b.key)).toList();
   }
 
-  /// Earned (from DB) + locked (with 0..1 progress). Always uses the full
-  /// computation so locked progress is accurate.
-  Future<({List<BadgeStatus> earned, List<BadgeStatus> locked})> getUserBadges(
-      String userId) async {
-    final progress = await _computeProgress(userId, full: true);
-    final earnedKeys = await _earnedKeys(userId);
+  /// One full pass for the achievements screen: computes progress ONCE, awards
+  /// any newly-earned badges (when [award]), and returns the earned/locked
+  /// lists, the new badges (for the celebration), and the experience count
+  /// (for the level) — replacing the old checkAndAwardBadges + getUserBadges +
+  /// separate count query (≈15 queries) with a single pass (≈8).
+  Future<AchievementsData> refreshAndGet(String userId,
+      {bool award = true}) async {
+    final result = await _computeProgress(userId, full: true);
+    final progress = result.progress;
+    var earnedKeys = await _earnedKeys(userId);
+
+    List<BadgeDef> newly = [];
+    if (award) {
+      final met = progress.entries
+          .where((e) => e.value >= 1.0)
+          .map((e) => e.key)
+          .toSet();
+      final toAward = met.difference(earnedKeys).toList();
+      if (toAward.isNotEmpty) {
+        try {
+          await _db.from('user_badges').upsert(
+                toAward.map((k) => {'user_id': userId, 'badge_key': k}).toList(),
+                onConflict: 'user_id,badge_key',
+                ignoreDuplicates: true,
+              );
+          earnedKeys = {...earnedKeys, ...toAward};
+          newly = catalog.where((b) => toAward.contains(b.key)).toList();
+        } catch (e) {
+          debugPrint('[gamification] award error: $e');
+        }
+      }
+    }
+
     final earned = <BadgeStatus>[];
     final locked = <BadgeStatus>[];
     for (final b in catalog) {
@@ -188,7 +229,12 @@ class GamificationService {
             BadgeStatus(b, false, (progress[b.key] ?? 0).clamp(0.0, 1.0)));
       }
     }
-    return (earned: earned, locked: locked);
+    return AchievementsData(
+      newlyEarned: newly,
+      earned: earned,
+      locked: locked,
+      experienceCount: result.experienceCount,
+    );
   }
 
   /// Just the earned badge keys (cheap — single query). For the profile header.
@@ -207,9 +253,11 @@ class GamificationService {
   }
 
   // ── Metrics → progress per badge key (raw ratio, clamped later) ─────────────
-  Future<Map<String, double>> _computeProgress(String userId,
+  Future<({Map<String, double> progress, int experienceCount})> _computeProgress(
+      String userId,
       {required bool full}) async {
     final p = <String, double>{};
+    int expCount = 0;
     try {
       // ── Cheap: single experiences query ──────────────────────────────────
       final expRes = await _db
@@ -220,6 +268,7 @@ class GamificationService {
               'restaurant:restaurants(category, city)')
           .eq('user_id', userId);
       final exps = List<Map<String, dynamic>>.from(expRes);
+      expCount = exps.length;
 
       final expIds = exps.map((e) => e['id'].toString()).toList();
       final restIds =
@@ -284,7 +333,7 @@ class GamificationService {
           .eq('following_id', userId);
       p['social'] = (followers as List).length / 10.0;
 
-      if (!full) return p;
+      if (!full) return (progress: p, experienceCount: expCount);
 
       // ── Heavy: cross-table queries (achievements screen only) ─────────────
       if (expIds.isNotEmpty) {
@@ -342,6 +391,6 @@ class GamificationService {
     } catch (e) {
       debugPrint('[gamification] computeProgress error: $e');
     }
-    return p;
+    return (progress: p, experienceCount: expCount);
   }
 }

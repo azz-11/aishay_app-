@@ -41,28 +41,17 @@ class _AchievementsScreenState extends State<AchievementsScreen> {
   Future<void> _load() async {
     try {
       final me = Supabase.instance.client.auth.currentUser?.id;
-
-      final exps = await Supabase.instance.client
-          .from('experiences')
-          .select('id')
-          .eq('user_id', widget.userId);
-      final count = (exps as List).length;
-
-      // Full recompute + award (own profile only).
-      List<BadgeDef> newBadges = [];
-      if (me == widget.userId) {
-        newBadges = await _svc.checkAndAwardBadges(widget.userId, full: true);
-      }
-
-      final badges = await _svc.getUserBadges(widget.userId);
+      // Single computation pass — awards only on the user's own profile.
+      final data = await _svc.refreshAndGet(widget.userId,
+          award: me == widget.userId);
       if (!mounted) return;
       setState(() {
-        _expCount = count;
-        _earned = badges.earned;
-        _locked = badges.locked;
+        _expCount = data.experienceCount;
+        _earned = data.earned;
+        _locked = data.locked;
         _loading = false;
       });
-      if (newBadges.isNotEmpty) _celebrate(newBadges);
+      if (data.newlyEarned.isNotEmpty) _celebrate(data.newlyEarned);
     } catch (e) {
       debugPrint('[achievements] load error: $e');
       if (mounted) setState(() => _loading = false);
