@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'welcome_screen.dart';
 import 'home_screen.dart';
+import 'onboarding/onboarding_identity_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -34,9 +35,15 @@ class _SplashScreenState extends State<SplashScreen>
     // Session is available synchronously after Supabase.initialize().
     final session = Supabase.instance.client.auth.currentSession;
 
-    // Warm-start the feed in parallel with the splash (idempotent).
+    // Warm-start the feed + fetch onboarding status in parallel with the splash.
+    Future<Map<String, dynamic>?>? userFuture;
     if (session != null) {
       HomeScreen.prefetchFeed();
+      userFuture = Supabase.instance.client
+          .from('users')
+          .select('onboarding_completed, display_name, username')
+          .eq('id', session.user.id)
+          .maybeSingle();
     }
 
     // First open: 300ms fade-in + 2000ms on-screen = 2300ms, then navigate.
@@ -47,7 +54,28 @@ class _SplashScreenState extends State<SplashScreen>
     }
     if (!mounted) return;
 
-    final next = session != null ? const HomeScreen() : const WelcomeScreen();
+    Widget next;
+    if (session == null) {
+      next = const WelcomeScreen();
+    } else {
+      Map<String, dynamic>? u;
+      try {
+        u = await userFuture;
+      } catch (e) {
+        debugPrint('[splash] onboarding check error: $e');
+      }
+      // Only an explicit `false` sends a user through onboarding; NULL / true
+      // (existing accounts) go straight home.
+      if (u != null && u['onboarding_completed'] == false) {
+        next = OnboardingIdentityScreen(
+          displayName: (u['display_name'] ?? '').toString(),
+          username: (u['username'] ?? '').toString(),
+        );
+      } else {
+        next = const HomeScreen();
+      }
+    }
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         pageBuilder: (_, __, ___) => next,

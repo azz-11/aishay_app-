@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'home_screen.dart';
+import 'onboarding/onboarding_identity_screen.dart';
 import 'security_utils.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -197,6 +198,7 @@ class _RegisterScreenState extends State<RegisterScreen>
       // Check if user exists in users table, if not create
       final user = Supabase.instance.client.auth.currentUser;
       debugPrint('[google] signed in as ${user?.id}');
+      bool isNewGoogleUser = false;
       if (user != null) {
         debugPrint('[google] checking for existing users row...');
         final existing = await Supabase.instance.client
@@ -207,6 +209,7 @@ class _RegisterScreenState extends State<RegisterScreen>
         debugPrint('[google] existing users row: $existing');
 
         if (existing == null) {
+          isNewGoogleUser = true;
           debugPrint('[google] inserting new users row for ${user.id}...');
           final userInsert = await Supabase.instance.client.from('users').insert({
             'id': user.id,
@@ -232,12 +235,26 @@ class _RegisterScreenState extends State<RegisterScreen>
       }
 
       if (mounted) {
-        debugPrint('[google] success → navigating to Home');
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-          (route) => false,
-        );
+        if (isNewGoogleUser) {
+          debugPrint('[google] new user → onboarding');
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(
+              builder: (_) => OnboardingIdentityScreen(
+                displayName: googleUser.displayName ?? googleUser.email,
+                username: googleUser.email.split('@')[0],
+              ),
+            ),
+            (route) => false,
+          );
+        } else {
+          debugPrint('[google] returning user → Home');
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+            (route) => false,
+          );
+        }
       }
     } catch (e, st) {
       debugPrint('[google] ERROR: $e');
@@ -543,7 +560,12 @@ class _RegisterScreenState extends State<RegisterScreen>
             GestureDetector(
   onTap: () {
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const HomeScreen()),
+      MaterialPageRoute(
+        builder: (_) => OnboardingIdentityScreen(
+          displayName: _nameController.text.trim(),
+          username: _usernameController.text.trim().toLowerCase(),
+        ),
+      ),
       (route) => false,
     );
   },
