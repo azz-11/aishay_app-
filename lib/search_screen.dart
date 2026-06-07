@@ -10,6 +10,7 @@ import 'l10n/app_strings.dart';
 import 'widgets/app_placeholder.dart';
 import 'widgets/app_avatar.dart';
 import 'widgets/restaurant_card.dart';
+import 'widgets/notifications_bell.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kDark    = Color(0xFF0F1923);
@@ -302,8 +303,16 @@ class _SearchScreenState extends State<SearchScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(AppStrings.exploreRestaurants,
-                    style: _tj(20, FontWeight.w900, Colors.white)),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Text(AppStrings.exploreRestaurants,
+                          style: _tj(20, FontWeight.w900, Colors.white)),
+                    ),
+                    const NotificationsBell(),
+                  ],
+                ),
                 const SizedBox(height: 2),
                 Text(AppStrings.searchSubtitle,
                     style: _tj(12, FontWeight.w400, _kTextSec)),

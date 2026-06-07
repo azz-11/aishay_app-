@@ -55,7 +55,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   String? _pressedCardId;
   // Deferred-library readiness for the lazily-loaded tabs.
-  bool _notifReady = false;
   bool _profileReady = false;
   bool _mapReady = false;
   bool _shouldAnimateList = true;
@@ -492,21 +491,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // Switches bottom-nav tabs, lazily loading deferred tab libraries on first
   // visit so their code isn't in the initial main.dart.js payload.
   Future<void> _selectTab(int i) async {
-    if (i == 3 && !_notifReady) {
-      await notif.loadLibrary();
-      if (mounted) setState(() => _notifReady = true);
+    if (i == 3 && !_mapReady) {
+      await map.loadLibrary();
+      if (mounted) setState(() => _mapReady = true);
     } else if (i == 4 && !_profileReady) {
       await profile.loadLibrary();
       if (mounted) setState(() => _profileReady = true);
-    } else if (i == 5 && !_mapReady) {
-      await map.loadLibrary();
-      if (mounted) setState(() => _mapReady = true);
     }
     if (!mounted) return;
-    setState(() {
-      _currentIndex = i;
-      if (i == 3) _unreadCount = 0;
-    });
+    setState(() => _currentIndex = i);
     if (i == 4) _profileRefreshNotifier.value++;
   }
 
@@ -623,14 +616,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               const SearchScreen(),
               // 2 — Add button slot
               const SizedBox(),
-              // 3 — Notifications (deferred lib; built after first visit)
-              _notifReady ? notif.NotificationsScreen() : const SizedBox(),
+              // 3 — Map (deferred lib; built after first visit)
+              _mapReady ? map.MapScreen() : const SizedBox(),
               // 4 — Profile (deferred lib; built after first visit)
               _profileReady
                   ? profile.ProfileScreen(refreshNotifier: _profileRefreshNotifier)
                   : const SizedBox(),
-              // 5 — Map (deferred lib; built after first visit)
-              _mapReady ? map.MapScreen() : const SizedBox(),
             ],
           ),
 
@@ -738,6 +729,50 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               child: Text(AppLocale.isArabic ? 'AR' : 'EN',
                   style: _tj(11, FontWeight.w800, Colors.white)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Notifications bell
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () async {
+              await notif.loadLibrary();
+              if (!mounted) return;
+              setState(() => _unreadCount = 0);
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => notif.NotificationsScreen()),
+              );
+              _checkUnread();
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(PhosphorIcons.bell(), color: Colors.white, size: 22),
+                  if (_unreadCount > 0)
+                    Positioned(
+                      top: -1,
+                      right: -1,
+                      child: AnimatedBuilder(
+                        animation: _notifPulse,
+                        builder: (_, __) => Transform.scale(
+                          scale: _notifPulse.value,
+                          child: Container(
+                            width: 9,
+                            height: 9,
+                            decoration: BoxDecoration(
+                              color: _kOrange,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: _kDark, width: 1.5),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ],
@@ -1226,9 +1261,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     switch (index) {
       case 0:  return PhosphorIcons.house(s);
       case 1:  return PhosphorIcons.magnifyingGlass(s);
-      case 3:  return PhosphorIcons.bell(s);
+      case 3:  return PhosphorIcons.mapPin(s);
       case 4:  return PhosphorIcons.user(s);
-      case 5:  return PhosphorIcons.mapPin(s);
       default: return PhosphorIcons.user(s);
     }
   }
@@ -1238,9 +1272,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       AppStrings.home,
       AppStrings.explore,
       '',
-      AppStrings.notifications,
-      AppStrings.profile,
       'الخريطة',
+      AppStrings.profile,
     ];
 
     return Container(
@@ -1305,33 +1338,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               child: Icon(_navIcon(i, active), size: 24, color: active ? _kOrange : _kTextSec),
                             ),
                           ),
-                          if (i == 3 && _unreadCount > 0)
-                            Positioned(
-                              top: -3, right: -4,
-                              child: AnimatedBuilder(
-                                animation: _notifPulse,
-                                builder: (_, __) => Transform.scale(
-                                  scale: _notifPulse.value,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                                    decoration: BoxDecoration(
-                                      color: _kOrange,
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(color: const Color(0xFF111C2B), width: 1.5),
-                                      boxShadow: [BoxShadow(color: _kOrange.withValues(alpha: 0.6), blurRadius: 4)],
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        _unreadCount > 9 ? '9+' : '$_unreadCount',
-                                        style: _tj(9, FontWeight.w800, Colors.white),
-                                        textAlign: TextAlign.center,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
                         ],
                       ),
                       const SizedBox(height: 2),

@@ -16,6 +16,7 @@ import 'achievements_screen.dart';
 import 'services/gamification_service.dart';
 import 'visits_screen.dart';
 import 'widgets/visit_card.dart';
+import 'widgets/notifications_bell.dart';
 
 // ── Design tokens (match home & detail screens)
 const _kDark    = Color(0xFF0F1923);
@@ -345,6 +346,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                           Text('حسابي', style: _tj(20, weight: FontWeight.w900)),
                           Row(
                             children: [
+                              const NotificationsBell(boxed: true),
+                              const SizedBox(width: 8),
                               _iconBtn(PhosphorIcons.shareNetwork(), _shareProfile),
                               const SizedBox(width: 8),
                               _iconBtn(PhosphorIcons.gear(), _openSettings),
