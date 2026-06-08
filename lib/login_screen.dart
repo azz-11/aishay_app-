@@ -116,6 +116,144 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  void _showForgotPasswordSheet() {
+    // Pre-fill with whatever the user already typed in the login email field.
+    final resetController =
+        TextEditingController(text: _emailController.text.trim());
+    bool sending = false;
+    String? sheetError;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true, // let the sheet rise above the keyboard
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: StatefulBuilder(
+            builder: (context, setSheetState) {
+              Future<void> sendReset() async {
+                final email = resetController.text.trim();
+                if (email.isEmpty || !email.contains('@')) {
+                  setSheetState(
+                      () => sheetError = 'أدخل بريداً إلكترونياً صحيحاً');
+                  return;
+                }
+                setSheetState(() {
+                  sending = true;
+                  sheetError = null;
+                });
+                try {
+                  await Supabase.instance.client.auth
+                      .resetPasswordForEmail(email);
+                  if (!sheetContext.mounted) return;
+                  Navigator.pop(sheetContext);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'تم إرسال رابط استعادة كلمة المرور إلى بريدك',
+                        textAlign: TextAlign.right,
+                      ),
+                      backgroundColor: Color(0xFF22304F),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                } on AuthException catch (e) {
+                  setSheetState(() {
+                    sending = false;
+                    sheetError = e.message;
+                  });
+                } catch (_) {
+                  setSheetState(() {
+                    sending = false;
+                    sheetError = 'حدث خطأ، حاول مرة أخرى';
+                  });
+                }
+              }
+
+              return Padding(
+                padding: EdgeInsets.only(
+                  left: 24,
+                  right: 24,
+                  top: 24,
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+                ),
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF22304F),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          margin: const EdgeInsets.only(bottom: 20),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const Text(
+                        'استعادة كلمة المرور',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'أدخل بريدك الإلكتروني وسنرسل لك رابطاً لإعادة التعيين',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF94A3B8),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      _InputField(
+                        controller: resetController,
+                        hint: 'example@email.com',
+                        icon: Icons.email_outlined,
+                        keyboardType: TextInputType.emailAddress,
+                      ),
+                      if (sheetError != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          sheetError!,
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFFFCA5A5),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      _LoginButton(
+                        loading: sending,
+                        onTap: sendReset,
+                        label: 'إرسال رابط الاستعادة',
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    ).whenComplete(resetController.dispose);
+  }
+
   void _registerFailedAttempt(String message) {
     _failedAttempts++;
     if (_failedAttempts >= _maxAttempts) {
@@ -304,7 +442,7 @@ class _LoginScreenState extends State<LoginScreen>
                       Align(
                         alignment: Alignment.centerLeft,
                         child: TextButton(
-                          onPressed: () {},
+                          onPressed: _showForgotPasswordSheet,
                           child: const Text(
                             'نسيت كلمة المرور؟',
                             style: TextStyle(
@@ -460,8 +598,13 @@ class _InputField extends StatelessWidget {
 class _LoginButton extends StatelessWidget {
   final bool loading;
   final VoidCallback onTap;
+  final String label;
 
-  const _LoginButton({required this.loading, required this.onTap});
+  const _LoginButton({
+    required this.loading,
+    required this.onTap,
+    this.label = 'دخول ←',
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -497,9 +640,9 @@ class _LoginButton extends StatelessWidget {
                         strokeWidth: 2.5,
                       ),
                     )
-                  : const Text(
-                      'دخول ←',
-                      style: TextStyle(
+                  : Text(
+                      label,
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
