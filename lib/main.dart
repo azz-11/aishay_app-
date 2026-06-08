@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_locale.dart';
+import 'reset_password_screen.dart';
 import 'splash_screen.dart';
 import 'welcome_screen.dart';
 
@@ -46,6 +47,12 @@ Future<void> main() async {
       navigatorKey.currentState?.pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const WelcomeScreen()),
         (route) => false,
+      );
+    } else if (data.event == AuthChangeEvent.passwordRecovery) {
+      // The user opened the recovery link from their email and Supabase
+      // established a temporary recovery session — let them set a new password.
+      navigatorKey.currentState?.push(
+        MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
       );
     }
   });

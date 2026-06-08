@@ -144,8 +144,10 @@ class _LoginScreenState extends State<LoginScreen>
                   sheetError = null;
                 });
                 try {
-                  await Supabase.instance.client.auth
-                      .resetPasswordForEmail(email);
+                  await Supabase.instance.client.auth.resetPasswordForEmail(
+                    email,
+                    redirectTo: 'https://aishay-app.vercel.app',
+                  );
                   if (!sheetContext.mounted) return;
                   Navigator.pop(sheetContext);
                   ScaffoldMessenger.of(context).showSnackBar(
