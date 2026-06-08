@@ -111,28 +111,45 @@ class _SplashScreenState extends State<SplashScreen>
                     const SizedBox.shrink(),
               ),
               const SizedBox(height: 24),
-              const Text(
-                'أي شيء',
+              // One line: "أي شيء · بس مو أي مطعم"
+              const Row(
+                mainAxisSize: MainAxisSize.min,
                 textDirection: TextDirection.rtl,
-                style: TextStyle(
-                  fontFamily: 'Tajawal',
-                  fontSize: 42,
-                  fontWeight: FontWeight.w900,
-                  color: Colors.white,
-                  decoration: TextDecoration.none,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'بس مو أي مطعم',
-                textDirection: TextDirection.rtl,
-                style: TextStyle(
-                  fontFamily: 'Tajawal',
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white70,
-                  decoration: TextDecoration.none,
-                ),
+                children: [
+                  Text(
+                    'أي شيء',
+                    textDirection: TextDirection.rtl,
+                    style: TextStyle(
+                      fontFamily: 'Tajawal',
+                      fontSize: 26,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                  Text(
+                    ' · ',
+                    textDirection: TextDirection.rtl,
+                    style: TextStyle(
+                      fontFamily: 'Tajawal',
+                      fontSize: 26,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xCCF26500),
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                  Text(
+                    'بس مو أي مطعم',
+                    textDirection: TextDirection.rtl,
+                    style: TextStyle(
+                      fontFamily: 'Tajawal',
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 10),
               const Text(
@@ -141,8 +158,8 @@ class _SplashScreenState extends State<SplashScreen>
                 textDirection: TextDirection.rtl,
                 style: TextStyle(
                   fontFamily: 'Tajawal',
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
                   color: Color(0xCCF26500),
                   decoration: TextDecoration.none,
                 ),
