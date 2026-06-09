@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import 'dart:async';
 import 'dart:typed_data';
 import 'security_utils.dart';
 import 'l10n/app_strings.dart';
@@ -47,6 +48,7 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
 
   // Controllers
   final _restController = TextEditingController();
+  final _restEnController = TextEditingController(); // optional English name (new restaurants)
   final _titleController = TextEditingController();
   final _descController = TextEditingController();
   final _dishNameCtrl = TextEditingController();
@@ -98,6 +100,8 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
   String? _restaurantName;
   String _restaurantCity = '';
   List<Map<String, dynamic>> _searchResults = [];
+  Timer? _searchDebounce;
+  bool _addingNewRestaurant = false; // user confirmed "add as new" (0 matches)
 
   // Location (NEW restaurants only) — captured from the mini-map center.
   final _miniMapController = MapController();
@@ -128,8 +132,10 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _slideCtrl.dispose();
     _restController.dispose();
+    _restEnController.dispose();
     _titleController.dispose();
     _descController.dispose();
     _dishNameCtrl.dispose();
@@ -203,18 +209,43 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
   }
 
   Future<void> _searchRestaurant(String query) async {
-    if (query.length < 2) {
-      setState(() => _searchResults = []);
+    final q = query.trim();
+    if (q.length < 2) {
+      if (mounted) setState(() => _searchResults = []);
       return;
     }
+    // Commas/parens are PostgREST .or() delimiters — strip them so a name with
+    // punctuation can't break the filter parsing.
+    final safe = q.replaceAll(RegExp(r'[,()]'), ' ').trim();
     try {
       final res = await Supabase.instance.client
           .from('restaurants')
-          .select()
-          .ilike('name_ar', '%$query%')
+          .select('id, name_ar, city, category')
+          .or('name_ar.ilike.%$safe%,name_en.ilike.%$safe%')
           .limit(5);
-      setState(() => _searchResults = List<Map<String, dynamic>>.from(res));
-    } catch (_) {}
+      final list = List<Map<String, dynamic>>.from(res);
+
+      // Tally experiences per matched restaurant in ONE query (avoids N+1).
+      final ids = list.map((r) => r['id']).where((id) => id != null).toList();
+      if (ids.isNotEmpty) {
+        final exps = await Supabase.instance.client
+            .from('experiences')
+            .select('restaurant_id')
+            .inFilter('restaurant_id', ids);
+        final counts = <dynamic, int>{};
+        for (final e in exps as List) {
+          final rid = e['restaurant_id'];
+          counts[rid] = (counts[rid] ?? 0) + 1;
+        }
+        for (final r in list) {
+          r['exp_count'] = counts[r['id']] ?? 0;
+        }
+      }
+
+      if (mounted) setState(() => _searchResults = list);
+    } catch (e) {
+      debugPrint('[add_exp] restaurant search error: $e');
+    }
   }
 
   void _nextStep() {
@@ -279,6 +310,8 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
             .from('restaurants')
             .insert({
               'name_ar': _restaurantName,
+              if (_restEnController.text.trim().isNotEmpty)
+                'name_en': _restEnController.text.trim(),
               'created_by': user.id,
               if (_selectedCategories.isNotEmpty)
                 'category': _selectedCategories.join(','),
@@ -704,8 +737,14 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                     setState(() {
                       _restaurantName = v;
                       _restaurantId = null;
+                      _addingNewRestaurant = false;
                     });
-                    _searchRestaurant(v);
+                    // Debounce: only fire the search 400ms after typing stops.
+                    _searchDebounce?.cancel();
+                    _searchDebounce = Timer(
+                      const Duration(milliseconds: 400),
+                      () => _searchRestaurant(v),
+                    );
                   },
                 ),
 
@@ -718,23 +757,102 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                       border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
                     ),
                     child: Column(
-                      children: _searchResults.map((r) => ListTile(
-                        dense: true,
-                        title: Text(r['name_ar'] ?? '',
-                            style: _tj(12)),
-                        subtitle: Text(r['city'] ?? '',
-                            style: _tj(10, color: _kTextSec)),
-                        onTap: () {
-                          setState(() {
-                            _restaurantId = r['id'];
-                            _restaurantName = r['name_ar'];
-                            _restController.text = r['name_ar'];
-                            _searchResults = [];
-                          });
-                        },
-                      )).toList(),
+                      children: _searchResults.map((r) {
+                        final city = (r['city'] ?? '').toString().trim();
+                        final count = (r['exp_count'] ?? 0) as int;
+                        final sub = [
+                          if (city.isNotEmpty) city,
+                          '$count تجربة',
+                        ].join(' · ');
+                        return ListTile(
+                          dense: true,
+                          leading: Icon(
+                              PhosphorIcons.storefront(PhosphorIconsStyle.fill),
+                              size: 18, color: _kOrange),
+                          title: Text(r['name_ar'] ?? '', style: _tj(12)),
+                          subtitle: Text(sub, style: _tj(10, color: _kTextSec)),
+                          onTap: () {
+                            setState(() {
+                              _restaurantId = r['id'];
+                              _restaurantName = r['name_ar'];
+                              _restController.text = r['name_ar'] ?? '';
+                              _searchResults = [];
+                              _addingNewRestaurant = false;
+                            });
+                          },
+                        );
+                      }).toList(),
                     ),
                   ),
+
+                // "Add as new" — only when the user typed ≥2 chars and there
+                // were 0 matches (and they haven't already confirmed).
+                if (_restaurantId == null &&
+                    _searchResults.isEmpty &&
+                    (_restaurantName ?? '').trim().length >= 2 &&
+                    !_addingNewRestaurant)
+                  GestureDetector(
+                    onTap: () =>
+                        setState(() => _addingNewRestaurant = true),
+                    child: Container(
+                      margin: const EdgeInsets.only(top: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _kOrange.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                        border:
+                            Border.all(color: _kOrange.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(PhosphorIcons.plusCircle(PhosphorIconsStyle.fill),
+                              size: 16, color: _kOrange),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'إضافة "${(_restaurantName ?? '').trim()}" كمطعم جديد',
+                              style: _tj(12,
+                                  weight: FontWeight.w700, color: _kOrange)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                // Optional English name — shown after the user confirms "add new".
+                if (_restaurantId == null && _addingNewRestaurant) ...[
+                  Container(
+                    margin: const EdgeInsets.only(top: 6),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF065F46).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: const Color(0xFF34D399).withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.add_circle_outline,
+                            color: Color(0xFF34D399), size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text('سيُضاف كمطعم جديد',
+                              style: _tj(11,
+                                  weight: FontWeight.w700,
+                                  color: const Color(0xFF34D399))),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _label('الاسم بالإنجليزي (اختياري)'),
+                  const SizedBox(height: 8),
+                  _input(
+                    controller: _restEnController,
+                    hint: 'Restaurant name in English',
+                  ),
+                ],
 
                 if (_restaurantId != null)
                   Container(
