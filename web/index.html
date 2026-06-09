@@ -53,6 +53,30 @@
       });
     }
   </script>
+
+  <!-- iOS PWA tap-offset fix: lock the viewport so Safari can't shift the
+       coordinate space relative to the Safe Area. -->
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      position: fixed;
+      width: 100%;
+      height: 100%;
+    }
+    html {
+      height: 100%;
+      width: 100%;
+    }
+    flt-glass-pane {
+      width: 100% !important;
+      height: 100% !important;
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+    }
+  </style>
 </head>
 <body>
   <!--
