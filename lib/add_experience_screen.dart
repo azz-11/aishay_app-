@@ -262,6 +262,20 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
   bool _isTitleValid(String title) => _titleWordCount(title) <= 6;
 
   Future<void> _submit() async {
+    // Photos are mandatory — at least one is required before saving.
+    if (_imageBytes.isEmpty) {
+      setState(() => _error = 'يرجى إضافة صورة واحدة على الأقل');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('يرجى إضافة صورة واحدة على الأقل للتجربة',
+              style: GoogleFonts.tajawal(), textAlign: TextAlign.right),
+          backgroundColor: const Color(0xFFb84b29),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     if (_restaurantName == null || _restaurantName!.isEmpty) {
       setState(() => _error = AppStrings.enterRestaurantName);
       return;
@@ -669,7 +683,20 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _label(AppStrings.photos),
+                Row(
+                  children: [
+                    Container(
+                        width: 3, height: 16, color: _kOrange,
+                        margin: const EdgeInsets.only(left: 8)),
+                    Text(AppStrings.photos,
+                        style: _tj(13,
+                            weight: FontWeight.w700, color: _kTextSec)),
+                    Text(' *',
+                        style: _tj(13,
+                            weight: FontWeight.w700,
+                            color: const Color(0xFFb84b29))),
+                  ],
+                ),
                 const SizedBox(height: 10),
                 SizedBox(
                   height: 92,
@@ -682,7 +709,13 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                           width: 82, height: 82,
                           margin: const EdgeInsets.only(left: 8),
                           decoration: BoxDecoration(
-                            border: Border.all(color: _kOrange, width: 1.5),
+                            // Red border draws attention while no photo is added.
+                            border: Border.all(
+                                color: _imageBytes.isEmpty
+                                    ? const Color(0xFFb84b29)
+                                        .withValues(alpha: 0.5)
+                                    : _kOrange,
+                                width: 1.5),
                             borderRadius: BorderRadius.circular(14),
                             color: _kOrange.withValues(alpha: 0.1),
                           ),
@@ -1687,7 +1720,7 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
           ),
         ),
         _nextBtn(_loading ? '...' : AppStrings.publishExperienceCta,
-            _loading ? () {} : _submit),
+            _loading ? () {} : _submit, muted: _imageBytes.isEmpty),
       ],
     );
   }
@@ -1815,10 +1848,12 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
     ),
   );
 
-  Widget _nextBtn(String label, VoidCallback onTap) {
+  Widget _nextBtn(String label, VoidCallback onTap, {bool muted = false}) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
+      child: Opacity(
+        opacity: muted ? 0.55 : 1.0,
+        child: Container(
         width: double.infinity,
         height: 56,
         margin: const EdgeInsets.all(16),
@@ -1837,6 +1872,7 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
         ),
         child: Center(
           child: Text(label, style: _tj(16, weight: FontWeight.w800)),
+        ),
         ),
       ),
     );
