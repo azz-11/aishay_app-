@@ -17,17 +17,37 @@ class _SplashScreenState extends State<SplashScreen>
   // (hot reload / MaterialApp rebuild) navigates immediately — no repeat.
   static bool _completed = false;
 
+  // One controller spans all staggered entrances (logo → line → tagline).
+  // Each element fades in over its own slice via an Interval curve:
+  //   logo    0–500ms   → Interval(0.000, 0.333)
+  //   line    600–1000ms→ Interval(0.400, 0.667)
+  //   tagline 1100–1500ms→Interval(0.733, 1.000)
   late final AnimationController _ctrl;
-  late final Animation<double> _fade;
+  late final Animation<double> _logoFade;
+  late final Animation<double> _lineFade;
+  late final Animation<double> _taglineFade;
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 300), // single fade-in
+      duration: const Duration(milliseconds: 1500), // full stagger window
     )..forward();
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
+
+    _logoFade = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.0, 0.333, curve: Curves.easeOut),
+    );
+    _lineFade = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.4, 0.667, curve: Curves.easeOut),
+    );
+    _taglineFade = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.733, 1.0, curve: Curves.easeOut),
+    );
+
     _boot();
   }
 
@@ -46,11 +66,12 @@ class _SplashScreenState extends State<SplashScreen>
           .maybeSingle();
     }
 
-    // First open: 300ms fade-in + 2000ms on-screen = 2300ms, then navigate.
+    // First open: stagger ends at 1500ms, then hold 1800ms = 3300ms total
+    // before navigating (the route transition does the 400ms fade-out).
     // Re-mounts skip the wait so the splash never repeats.
     if (!_completed) {
       _completed = true;
-      await Future.delayed(const Duration(milliseconds: 2300));
+      await Future.delayed(const Duration(milliseconds: 3300));
     }
     if (!mounted) return;
 
@@ -96,23 +117,27 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0F1923),
-      // ONE fade-in for all elements together — no phases, no cross-fade.
-      body: FadeTransition(
-        opacity: _fade,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Image.asset(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 1. Logo — fades in first (0–500ms)
+            FadeTransition(
+              opacity: _logoFade,
+              child: Image.asset(
                 'assets/images/logo.png',
                 width: 110,
                 errorBuilder: (context, error, stackTrace) =>
                     const SizedBox.shrink(),
               ),
-              const SizedBox(height: 24),
-              // One line: "أي شيء · بس مو أي مطعم"
-              const Row(
+            ),
+            const SizedBox(height: 24),
+
+            // 2. "أي شيء · بس مو أي مطعم" — fades in after logo (600–1000ms)
+            FadeTransition(
+              opacity: _lineFade,
+              child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 textDirection: TextDirection.rtl,
                 children: [
@@ -128,11 +153,11 @@ class _SplashScreenState extends State<SplashScreen>
                     ),
                   ),
                   Text(
-                    ' · ',
+                    '  ·  ',
                     textDirection: TextDirection.rtl,
                     style: TextStyle(
                       fontFamily: 'Tajawal',
-                      fontSize: 26,
+                      fontSize: 20,
                       fontWeight: FontWeight.w900,
                       color: Color(0xCCF26500),
                       decoration: TextDecoration.none,
@@ -151,8 +176,13 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              const Text(
+            ),
+            const SizedBox(height: 10),
+
+            // 3. "عش تجربة المكان قبل زيارته" — fades in last (1100–1500ms)
+            FadeTransition(
+              opacity: _taglineFade,
+              child: const Text(
                 'عش تجربة المكان قبل زيارته',
                 textAlign: TextAlign.center,
                 textDirection: TextDirection.rtl,
@@ -164,8 +194,8 @@ class _SplashScreenState extends State<SplashScreen>
                   decoration: TextDecoration.none,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
