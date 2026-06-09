@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -38,6 +39,28 @@ Future<void> main() async {
     url: dotenv.maybeGet('SUPABASE_URL') ?? _fallbackSupabaseUrl,
     anonKey: dotenv.maybeGet('SUPABASE_ANON_KEY') ?? _fallbackSupabaseAnonKey,
   );
+
+  // On Flutter Web the recovery link lands with the token in the URL fragment
+  // (#access_token=...&refresh_token=...&type=recovery). Detect it at startup
+  // and jump straight to the reset screen instead of booting the normal app
+  // (which would otherwise route the established session to Home).
+  // Note: setSession() takes the REFRESH token, not the access token.
+  if (kIsWeb) {
+    final fragment = Uri.base.fragment;
+    if (fragment.isNotEmpty) {
+      final params = Uri.splitQueryString(fragment);
+      if (params['type'] == 'recovery' && params['refresh_token'] != null) {
+        await Supabase.instance.client.auth.setSession(
+          params['refresh_token']!,
+        );
+        runApp(const MaterialApp(
+          home: ResetPasswordScreen(),
+          debugShowCheckedModeBanner: false,
+        ));
+        return;
+      }
+    }
+  }
 
   // Session security: Supabase auto-refreshes tokens. If the session ends
   // (sign-out, deletion, or an unrecoverable refresh failure), force the user
