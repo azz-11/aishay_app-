@@ -91,14 +91,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     'أكلات شعبية',
     'عصائر',
   ];
-  final _catIcons   = <PhosphorIconData>[
-    PhosphorIconsRegular.forkKnife,
-    PhosphorIconsRegular.coffee,
-    PhosphorIconsRegular.flame,
-    PhosphorIconsRegular.fish,
-    PhosphorIconsRegular.hamburger,
-    PhosphorIconsRegular.leaf,
-  ];
+  // Category → icon map, so adding categories never breaks a positional index.
+  static const _catIcon = <String, PhosphorIconData>{
+    'الكل':           PhosphorIconsRegular.squaresFour,
+    'مشويات':         PhosphorIconsRegular.flame,
+    'برغر':           PhosphorIconsRegular.hamburger,
+    'آسيوي':          PhosphorIconsRegular.bowlFood,
+    'كافيهات':        PhosphorIconsRegular.coffee,
+    'سوشي':           PhosphorIconsRegular.fish,
+    'بيتزا':          PhosphorIconsRegular.pizza,
+    'صحي':            PhosphorIconsRegular.leaf,
+    'دجاج':           PhosphorIconsRegular.bird,
+    'أرز':            PhosphorIconsRegular.grains,
+    'مأكولات بحرية':  PhosphorIconsRegular.fish,
+    'شاورما':         PhosphorIconsRegular.bread,
+    'حلويات':         PhosphorIconsRegular.cake,
+    'ستيك':           PhosphorIconsRegular.knife,
+    'مكسيكي':         PhosphorIconsRegular.pepper,
+    'هندي':           PhosphorIconsRegular.bowlFood,
+    'إيطالي':         PhosphorIconsRegular.wine,
+    'أكلات شعبية':    PhosphorIconsRegular.cookingPot,
+    'عصائر':          PhosphorIconsRegular.drop,
+  };
 
   @override
   void initState() {
@@ -1057,7 +1071,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(_catIcons[i], size: 13, color: active ? Colors.white : _kTextSec),
+                      Icon(_catIcon[_categories[i]] ?? PhosphorIconsRegular.forkKnife,
+                          size: 13, color: active ? Colors.white : _kTextSec),
                       const SizedBox(width: 5),
                       Text(cat,
                           style: _tj(12, active ? FontWeight.w700 : FontWeight.w500,
