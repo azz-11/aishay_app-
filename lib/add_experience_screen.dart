@@ -1265,13 +1265,26 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
           ),
         ),
         _nextBtn(AppStrings.next, () {
+          // Catch the missing photo here, before the user fills later steps.
+          if (_imageBytes.isEmpty) {
+            setState(() => _error = 'يرجى إضافة صورة واحدة على الأقل');
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('يرجى إضافة صورة واحدة على الأقل للتجربة',
+                    style: GoogleFonts.tajawal(), textAlign: TextAlign.right),
+                backgroundColor: const Color(0xFFb84b29),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+            return;
+          }
           if (_titleController.text.trim().isEmpty) {
             setState(() => _error = AppStrings.enterTitle);
             return;
           }
           setState(() => _error = null);
           _nextStep();
-        }),
+        }, muted: _imageBytes.isEmpty),
       ],
     );
   }
