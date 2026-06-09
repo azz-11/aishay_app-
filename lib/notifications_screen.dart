@@ -530,6 +530,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         'status': status,
         'responded_at': DateTime.now().toIso8601String(),
       }).eq('visit_id', visitId).eq('invitee_id', me);
+      // Mark the notification as read once the invite is answered.
+      final notifId = notif['id'];
+      if (notifId != null && notif['is_read'] != true) {
+        if (mounted) setState(() => notif['is_read'] = true);
+        await Supabase.instance.client
+            .from('notifications')
+            .update({'is_read': true}).eq('id', notifId);
+      }
     } catch (e) {
       debugPrint('[notifications] respond error: $e');
       if (mounted) {

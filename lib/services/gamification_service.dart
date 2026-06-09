@@ -108,6 +108,7 @@ class GamificationService {
     BadgeDef('india_guest', 'ضيف الهند', PhosphorIcons.cookingPot, '10 تجارب هندية'),
     BadgeDef('italy_son', 'ابن إيطاليا', PhosphorIcons.wine, '10 تجارب إيطالية'),
     BadgeDef('authentic', 'أصيل', PhosphorIcons.houseLine, '10 تجارب أصيلة'),
+    BadgeDef('juice_expert', 'عاشق العصائر', PhosphorIcons.drop, 'عصائر 10+ تجارب'),
     // Activity badges
     BadgeDef('first_reviewer', 'أول المجرّبين', PhosphorIcons.medal, 'أول من يضيف تجربة لمطعم'),
     BadgeDef('beloved', 'محبوب الذواقة', PhosphorIcons.heart, '100 يستاهل على تجاربك'),
@@ -150,6 +151,7 @@ class GamificationService {
     'india_guest': ['هندي', 'هند', 'indian'],
     'italy_son': ['إيطالي', 'ايطالي', 'italian', 'باستا', 'pasta'],
     'authentic': ['شعبي', 'تقليدي', 'أصيل', 'اصيل', 'بلدي', 'traditional', 'authentic'],
+    'juice_expert': ['عصائر', 'juice', 'عصير', 'smoothie'],
   };
 
   // ── Public API ────────────────────────────────────────────────────────────────

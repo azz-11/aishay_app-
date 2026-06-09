@@ -70,7 +70,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   RealtimeChannel? _realtimeChannel;
   RealtimeChannel? _notifChannel;
 
-  final _categories = ['الكل', 'كافيهات', 'مشويات', 'سوشي', 'برغر', 'صحي'];
+  final _categories = [
+    'الكل',
+    'مشويات',
+    'برغر',
+    'آسيوي',
+    'كافيهات',
+    'سوشي',
+    'بيتزا',
+    'صحي',
+    'دجاج',
+    'أرز',
+    'مأكولات بحرية',
+    'شاورما',
+    'حلويات',
+    'ستيك',
+    'مكسيكي',
+    'هندي',
+    'إيطالي',
+    'أكلات شعبية',
+    'عصائر',
+  ];
   final _catIcons   = <PhosphorIconData>[
     PhosphorIconsRegular.forkKnife,
     PhosphorIconsRegular.coffee,
@@ -382,11 +402,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   List<String> _catKeywords(String cat) {
     const map = <String, List<String>>{
-      'كافيهات': ['كافيه', 'كافيهات', 'cafe', 'coffee'],
-      'مشويات':  ['مشوي', 'مشويات', 'grill', 'bbq', 'شواء'],
-      'سوشي':    ['سوشي', 'sushi', 'japanese'],
-      'برغر':    ['برغر', 'برجر', 'burger'],
-      'صحي':     ['صحي', 'healthy', 'salad', 'سلطة'],
+      'مشويات':        ['مشوي', 'مشويات', 'مشاوي', 'grill', 'bbq', 'شواء'],
+      'برغر':          ['برغر', 'برجر', 'burger'],
+      'آسيوي':         ['آسيوي', 'اسيوي', 'asian', 'نودلز', 'noodle', 'تايلندي', 'صيني', 'chinese', 'thai'],
+      'كافيهات':       ['كافيه', 'كافيهات', 'كوفي', 'cafe', 'coffee', 'كيف'],
+      'سوشي':          ['سوشي', 'sushi', 'ياباني', 'japanese'],
+      'بيتزا':         ['بيتزا', 'pizza'],
+      'صحي':           ['صحي', 'healthy', 'salad', 'سلطة', 'دايت'],
+      'دجاج':          ['دجاج', 'chicken', 'بروست', 'broast'],
+      'أرز':           ['رز', 'أرز', 'rice', 'كبسة', 'مندي', 'برياني', 'biryani'],
+      'مأكولات بحرية': ['بحري', 'بحرية', 'مأكولات بحرية', 'seafood', 'سمك', 'fish', 'جمبري', 'shrimp', 'روبيان'],
+      'شاورما':        ['شاورما', 'shawarma'],
+      'حلويات':        ['حلو', 'حلويات', 'حلا', 'sweet', 'dessert', 'كيك', 'cake'],
+      'ستيك':          ['ستيك', 'steak', 'لحم', 'لحوم', 'meat'],
+      'مكسيكي':        ['مكسيك', 'mexican', 'تاكو', 'taco'],
+      'هندي':          ['هندي', 'هند', 'indian'],
+      'إيطالي':        ['إيطالي', 'ايطالي', 'italian', 'باستا', 'pasta'],
+      'أكلات شعبية':   ['شعبي', 'تقليدي', 'أصيل', 'اصيل', 'بلدي', 'أكلات شعبية', 'traditional', 'authentic'],
+      'عصائر':         ['عصائر', 'عصير', 'juice', 'smoothie'],
     };
     return map[cat] ?? [cat];
   }
