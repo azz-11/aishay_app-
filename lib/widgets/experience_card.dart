@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
-import '../l10n/app_strings.dart';
+import 'app_avatar.dart';
 import 'app_placeholder.dart';
 
 // Theme tokens (mirror home_screen's library-private constants).
@@ -107,6 +107,10 @@ class _ExperienceCardState extends State<ExperienceCard> {
     final title = (exp['title'] as String? ?? '').trim();
     final desc = (exp['description'] as String? ?? '').trim();
     final preview = title.isNotEmpty ? title : desc;
+    final user = exp['user'] as Map<String, dynamic>?;
+    final userName = (user?['display_name'] ?? 'مستخدم').toString();
+    final userHandle = (user?['username'] ?? '').toString();
+    final userAvatar = user?['avatar_url'] as String?;
 
     return GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),
@@ -225,11 +229,21 @@ class _ExperienceCardState extends State<ExperienceCard> {
                         Text(exp['visit_time'].toString(), style: _tj(9, FontWeight.w500, _kTextSec)),
                       ],
                       const Spacer(),
+                      // Who posted this experience (like count stays on the photo badge).
                       Row(
                         children: [
-                          Icon(PhosphorIcons.flame(PhosphorIconsStyle.fill), size: 9, color: _kOrange),
-                          const SizedBox(width: 3),
-                          Text('$likes ${AppStrings.worthIt}', style: _tj(9, FontWeight.w600, _kTextSec)),
+                          AppAvatar(
+                            displayName: userName,
+                            username: userHandle,
+                            avatarUrl: userAvatar,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(userName,
+                                style: _tj(9, FontWeight.w600, _kTextSec),
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ),
                         ],
                       ),
                     ],
