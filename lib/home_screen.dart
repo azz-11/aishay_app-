@@ -1,5 +1,4 @@
-﻿import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart';
+﻿import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
@@ -8,18 +7,18 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'add_experience_screen.dart' deferred as add_exp;
 import 'app_locale.dart';
 import 'l10n/app_strings.dart';
-import 'widgets/app_placeholder.dart';
 import 'experience_detail_screen.dart';
 import 'notifications_screen.dart' deferred as notif;
 import 'profile_screen.dart' deferred as profile;
 import 'map_screen.dart' deferred as map;
 import 'search_screen.dart';
+import 'following_feed_screen.dart';
+import 'widgets/experience_card.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kDark    = Color(0xFF0F1923);
 const _kDark2   = Color(0xFF1A2340);
 const _kOrange  = Color(0xFFF26500);
-const _kGold    = Color(0xFFC8931A);
 const _kCardBg  = Color(0xFF1E2D45);
 const _kTextSec = Color(0xFF94A3B8);
 
@@ -45,6 +44,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _currentIndex = 0;
   List<Map<String, dynamic>> _experiences = [];
+  // Latest experiences from people the user follows ("تثق بتجاربهم" strip).
+  List<Map<String, dynamic>> _followingExperiences = [];
   Map<String, dynamic>? _topExperience;
   bool _loading = true;
   String _selectedCategory = 'الكل';
@@ -53,7 +54,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Map<String, dynamic>? _selectedExp;
   final _profileRefreshNotifier = ValueNotifier<int>(0);
 
-  String? _pressedCardId;
   // Deferred-library readiness for the lazily-loaded tabs.
   bool _profileReady = false;
   bool _mapReady = false;
@@ -330,9 +330,56 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           });
         }
       }
+      if (!loadMore) _loadFollowing(); // refresh the "تثق بتجاربهم" strip too
     } catch (e) {
       debugPrint('Error loading data: $e');
       if (mounted) setState(() { _loading = false; _loadingMore = false; });
+    }
+  }
+
+  /// Latest 3 experiences from people the current user follows. Hidden entirely
+  /// when the user follows no one or none of them have posted.
+  Future<void> _loadFollowing() async {
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    if (me == null) return;
+    try {
+      final follows = await Supabase.instance.client
+          .from('follows')
+          .select('following_id')
+          .eq('follower_id', me);
+      final ids = (follows as List)
+          .map((f) => f['following_id']?.toString())
+          .whereType<String>()
+          .toList();
+      if (ids.isEmpty) {
+        if (mounted) setState(() => _followingExperiences = []);
+        return;
+      }
+      final res = await Supabase.instance.client
+          .from('experiences')
+          .select(_kSelectFields)
+          .inFilter('user_id', ids)
+          .order('created_at', ascending: false)
+          .limit(3);
+      final list = List<Map<String, dynamic>>.from(res);
+      if (list.isNotEmpty) {
+        final expIds = list.map((e) => e['id'].toString()).toList();
+        final likes = await Supabase.instance.client
+            .from('likes')
+            .select('experience_id')
+            .inFilter('experience_id', expIds);
+        final counts = <String, int>{};
+        for (final l in likes as List) {
+          final id = l['experience_id'].toString();
+          counts[id] = (counts[id] ?? 0) + 1;
+        }
+        for (final e in list) {
+          e['likes_count'] = counts[e['id'].toString()] ?? 0;
+        }
+      }
+      if (mounted) setState(() => _followingExperiences = list);
+    } catch (e) {
+      debugPrint('[home] following feed error: $e');
     }
   }
 
@@ -436,13 +483,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       'عصائر':         ['عصائر', 'عصير', 'juice', 'smoothie'],
     };
     return map[cat] ?? [cat];
-  }
-
-  double _avgRating(Map<String, dynamic> exp) {
-    const fields = ['rating_food', 'rating_service', 'rating_ambiance', 'rating_clean', 'rating_value'];
-    final vals = fields.map((f) => (exp[f] as num?)?.toDouble() ?? 0.0).where((v) => v > 0).toList();
-    if (vals.isEmpty) return 0;
-    return vals.reduce((a, b) => a + b) / vals.length;
   }
 
   // ── City picker bottom sheet ───────────────────────────────────────────────
@@ -597,6 +637,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                             if (_topExperience != null) _buildBanner(_topExperience!),
                                             _buildMoodSection(),
                                             _buildCategories(),
+                                            _buildTrustedSection(),
                                             Padding(
                                               padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
                                               child: Row(
@@ -629,12 +670,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                             ),
                                             delegate: SliverChildBuilderDelegate(
                                               (context, i) {
+                                                final exp = _filtered[i];
+                                                final gridCard = ExperienceCard(
+                                                  experience: exp,
+                                                  onTap: () => _openExp(exp),
+                                                  scrollController: _scrollController,
+                                                );
                                                 final card = _shouldAnimateList
                                                     ? _AnimatedCard(
                                                         delay: Duration(milliseconds: i * 80),
-                                                        child: _buildGridCard(_filtered[i]),
+                                                        child: gridCard,
                                                       )
-                                                    : _buildGridCard(_filtered[i]);
+                                                    : gridCard;
                                                 return RepaintBoundary(child: card);
                                               },
                                               childCount: _filtered.length,
@@ -1088,217 +1135,53 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  // ── GRID CARD (2-column) ──────────────────────────────────────────────────
+  // ── "تثق بتجاربهم" — latest experiences from people the user follows ───────
 
-  Widget _buildGridCard(Map<String, dynamic> exp) {
-    final rating   = _avgRating(exp);
-    final restName = exp['restaurant']?['name_ar'] ?? 'مطعم';
-    final likes    = exp['likes_count'] ?? 0;
-    final photos   = exp['photos'] as List? ?? [];
-    final title    = (exp['title'] as String? ?? '').trim();
-    final desc     = (exp['description'] as String? ?? '').trim();
-    final preview  = title.isNotEmpty ? title : desc;
-    final expId    = exp['id']?.toString();
-
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _pressedCardId = expId),
-      onTapUp: (_) => setState(() => _pressedCardId = null),
-      onTapCancel: () => setState(() => _pressedCardId = null),
-      onTap: () => _openExp(exp),
-      child: AnimatedScale(
-        scale: _pressedCardId == expId ? 0.97 : 1.0,
-        duration: const Duration(milliseconds: 150),
-        child: Container(
-        decoration: BoxDecoration(
-          color: _kCardBg,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.32), blurRadius: 12, offset: const Offset(0, 4)),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Photo ──────────────────────────────────────────────────────
-            Expanded(
-              flex: 6,
-              child: ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    photos.isNotEmpty
-                        ? kIsWeb
-                            ? CachedNetworkImage(
-                                imageUrl: photos[0].toString(),
-                                fit: BoxFit.cover,
-                                placeholder: (_, __) => const ColoredBox(color: _kCardBg),
-                                errorWidget: (_, __, ___) => _placeholderImg(restName),
-                              )
-                            : AnimatedBuilder(
-                                animation: _scrollController,
-                                builder: (_, child) {
-                                  final parallax = _scrollController.hasClients
-                                      ? -(_scrollController.offset * 0.08).clamp(0.0, 14.0)
-                                      : 0.0;
-                                  return Transform.translate(
-                                    offset: Offset(0, parallax),
-                                    child: child,
-                                  );
-                                },
-                                child: CachedNetworkImage(
-                                  imageUrl: photos[0].toString(),
-                                  fit: BoxFit.cover,
-                                  placeholder: (_, __) => const ColoredBox(color: _kCardBg),
-                                  errorWidget: (_, __, ___) => _placeholderImg(restName),
-                                ),
-                              )
-                        : _placeholderImg(restName),
-                    Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [Colors.transparent, Colors.black.withValues(alpha: 0.88)],
-                            stops: const [0.28, 1.0],
-                          ),
-                        ),
-                      ),
-                    ),
-                    // Rating badge top-right
-                    if (rating > 0)
-                      Positioned(
-                        top: 8, right: 8,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: _kGold,
-                            borderRadius: BorderRadius.circular(8),
-                            boxShadow: [BoxShadow(color: _kGold.withValues(alpha: 0.4), blurRadius: 6)],
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(PhosphorIcons.star(PhosphorIconsStyle.fill), size: 9, color: Colors.white),
-                              const SizedBox(width: 2),
-                              Text(rating.toStringAsFixed(1),
-                                  style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w800)),
-                            ],
-                          ),
-                        ),
-                      ),
-                    // يستاهل badge top-left
-                    Positioned(
-                      top: 8, left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(PhosphorIcons.flame(PhosphorIconsStyle.fill), size: 9, color: _kOrange),
-                            const SizedBox(width: 2),
-                            Text('$likes', style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700)),
-                          ],
-                        ),
-                      ),
-                    ),
-                    // Title overlay at bottom of photo
-                    if (preview.isNotEmpty)
-                      Positioned(
-                        bottom: 8, left: 8, right: 8,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              width: 32, height: 3,
-                              decoration: BoxDecoration(
-                                color: _kOrange,
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                            const SizedBox(height: 5),
-                            _styledTitle(preview),
-                          ],
-                        ),
-                      ),
-                  ],
+  Widget _buildTrustedSection() {
+    if (_followingExperiences.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('تثق بتجاربهم',
+                  style: _tj(15, FontWeight.w800, Colors.white)),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const FollowingFeedScreen()),
                 ),
+                child: Text('عرض المزيد ‹',
+                    style: _tj(12, FontWeight.w600, _kOrange)),
               ),
-            ),
-
-            // ── Info below photo ───────────────────────────────────────────
-            Expanded(
-              flex: 3,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(9, 8, 9, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      restName,
-                      style: _tj(12, FontWeight.w800, Colors.white, height: 1.2),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if ((exp['visit_time'] as String?) != null &&
-                        (exp['visit_time'] as String).isNotEmpty) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        exp['visit_time'].toString(),
-                        style: _tj(9, FontWeight.w500, _kTextSec),
-                      ),
-                    ],
-                    const Spacer(),
-                    Row(
-                      children: [
-                        Icon(PhosphorIcons.flame(PhosphorIconsStyle.fill), size: 9, color: _kOrange),
-                        const SizedBox(width: 3),
-                        Text('$likes ${AppStrings.worthIt}', style: _tj(9, FontWeight.w600, _kTextSec)),
-                      ],
-                    ),
-                  ],
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 236,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            physics: const BouncingScrollPhysics(),
+            itemCount: _followingExperiences.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (context, i) {
+              final exp = _followingExperiences[i];
+              return SizedBox(
+                width: 150, // 150 × 236 ≈ the grid card's 0.62 aspect ratio
+                child: ExperienceCard(
+                  experience: exp,
+                  onTap: () => _openExp(exp),
                 ),
-              ),
-            ),
-          ],
+              );
+            },
+          ),
         ),
-        ),
-      ),
-    );
-  }
-
-  Widget _placeholderImg(String name) =>
-      AppPlaceholder(name: name, borderRadius: 0);
-
-  Widget _styledTitle(String text, {double fontSize = 11.0}) {
-    final words = text.trim().split(' ');
-    final firstWord = words.isNotEmpty ? words.first : '';
-    final rest = words.length > 1 ? words.sublist(1).join(' ') : '';
-    return RichText(
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
-      textDirection: TextDirection.rtl,
-      text: TextSpan(
-        style: GoogleFonts.tajawal(
-          fontSize: fontSize,
-          fontWeight: FontWeight.w700,
-          shadows: const [
-            Shadow(color: Color(0xCC000000), blurRadius: 8, offset: Offset(0, 2)),
-          ],
-        ),
-        children: [
-          const TextSpan(text: '❝ ', style: TextStyle(color: _kOrange)),
-          TextSpan(text: firstWord, style: const TextStyle(color: _kOrange)),
-          if (rest.isNotEmpty)
-            TextSpan(text: ' $rest', style: const TextStyle(color: Colors.white)),
-          const TextSpan(text: ' ❞', style: TextStyle(color: _kOrange)),
-        ],
-      ),
+      ],
     );
   }
 
