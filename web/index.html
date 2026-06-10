@@ -57,17 +57,15 @@
   <!-- iOS PWA tap-offset fix: lock the viewport so Safari can't shift the
        coordinate space relative to the Safe Area. -->
   <style>
-    body {
+    html, body {
       margin: 0;
       padding: 0;
+      width: 100%;
+      height: var(--real-vh, 100%);
       overflow: hidden;
       position: fixed;
-      width: 100%;
-      height: 100%;
-    }
-    html {
-      height: 100%;
-      width: 100%;
+      top: 0;
+      left: 0;
     }
     flt-glass-pane {
       width: 100% !important;
@@ -88,5 +86,23 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+
+  <!-- iOS PWA tap-offset fix (load-bearing): 100vh is wrong in standalone PWA
+       mode, so drive the real viewport height into a CSS variable from JS. -->
+  <script>
+    function setRealVH() {
+      var h = window.visualViewport
+        ? window.visualViewport.height
+        : window.innerHeight;
+      document.documentElement.style.setProperty('--real-vh', h + 'px');
+    }
+    setRealVH();
+    window.addEventListener('resize', setRealVH);
+    window.addEventListener('orientationchange', setRealVH);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', setRealVH);
+      window.visualViewport.addEventListener('scroll', setRealVH);
+    }
+  </script>
 </body>
 </html>
