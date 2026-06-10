@@ -153,13 +153,40 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         }
         for (final n in notifications) {
           final vid = n['visit_id'];
-          if (vid != null && visitMap.containsKey(vid)) {
+          if (vid == null) continue;
+          // The visit row (name/date) is optional — an invitee may not be able
+          // to SELECT it under RLS, and that must NOT hide the buttons.
+          if (visitMap.containsKey(vid)) {
             final v = visitMap[vid]!;
             n['visit_restaurant'] = v['restaurant']?['name_ar']?.toString();
             n['visit_date_label'] = formatVisitDateStrAr(v['visit_date']?.toString());
-            n['visit_status'] = statusMap[vid] ?? 'pending';
+          }
+          // Status comes from visit_invites (which the invitee CAN read) and
+          // drives the accept/decline buttons independently.
+          if (statusMap.containsKey(vid)) {
+            n['visit_status'] = statusMap[vid];
           }
         }
+
+        // ── DEBUG: why don't invite buttons show? ────────────────────────────
+        debugPrint('[invite-debug] visitIds=$visitIds');
+        debugPrint('[invite-debug] visits rows fetched=${visitMap.length} '
+            'keys=${visitMap.keys.toList()}');
+        debugPrint('[invite-debug] visit_invites rows fetched=${statusMap.length} '
+            'statusMap=$statusMap');
+        for (final n in notifications.where((n) => n['type'] == 'visit_invite')) {
+          final vid = n['visit_id'];
+          debugPrint('[invite-debug] notif id=${n['id']} type=${n['type']} '
+              'visit_id=$vid → visit_status=${n['visit_status']} '
+              '(visitMap.has=${visitMap.containsKey(vid)}, '
+              'statusMap.has=${statusMap.containsKey(vid)})');
+        }
+      } else {
+        // No visit_invite notifications carried a visit_id at all.
+        final inviteCount =
+            notifications.where((n) => n['type'] == 'visit_invite').length;
+        debugPrint('[invite-debug] visitIds EMPTY — '
+            'visit_invite notifs=$inviteCount (none had a non-null visit_id)');
       }
 
       if (mounted) {
@@ -522,14 +549,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _respondInvite(Map<String, dynamic> notif, String status) async {
     final me = Supabase.instance.client.auth.currentUser?.id;
     final visitId = notif['visit_id'];
-    if (me == null || visitId == null) return;
+    // ── DEBUG: log inputs before the update ──────────────────────────────────
+    debugPrint('[invite] respond tapped → status=$status '
+        'visit_id=$visitId (${visitId?.runtimeType}) '
+        'invitee_id=$me notif_id=${notif['id']} '
+        'current_status=${notif['visit_status']}');
+    if (me == null || visitId == null) {
+      debugPrint('[invite] ABORT before query: me=$me visitId=$visitId');
+      return;
+    }
     final prev = notif['visit_status'];
     setState(() => notif['visit_status'] = status); // optimistic
     try {
-      await Supabase.instance.client.from('visit_invites').update({
+      // .select() appended so the response (and affected-row count) is
+      // observable — an update without it succeeds silently on 0 rows.
+      final res = await Supabase.instance.client.from('visit_invites').update({
         'status': status,
         'responded_at': DateTime.now().toIso8601String(),
-      }).eq('visit_id', visitId).eq('invitee_id', me);
+      }).eq('visit_id', visitId).eq('invitee_id', me).select();
+      final rows = res as List;
+      debugPrint('[invite] update returned ${rows.length} row(s): $rows');
+      if (rows.isEmpty) {
+        debugPrint('[invite] ⚠️ 0 rows updated — no visit_invites row matches '
+            'visit_id=$visitId + invitee_id=$me, OR RLS blocked the update.');
+      }
       // Mark the notification as read once the invite is answered.
       final notifId = notif['id'];
       if (notifId != null && notif['is_read'] != true) {
@@ -538,8 +581,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             .from('notifications')
             .update({'is_read': true}).eq('id', notifId);
       }
-    } catch (e) {
-      debugPrint('[notifications] respond error: $e');
+    } catch (e, st) {
+      debugPrint('[invite] respond ERROR: $e');
+      debugPrint('[invite] stacktrace: $st');
       if (mounted) {
         setState(() => notif['visit_status'] = prev);
         ScaffoldMessenger.of(context).showSnackBar(
