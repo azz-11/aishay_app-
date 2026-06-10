@@ -25,9 +25,10 @@ const _kTextSec = Color(0xFF94A3B8);
 TextStyle _tj(double size, FontWeight weight, Color color, {double height = 1.0}) =>
     GoogleFonts.tajawal(fontSize: size, fontWeight: weight, color: color, height: height);
 
+// Same 9 cities as onboarding (onboarding_preferences_screen.dart). No "الكل".
 const _kSaudiCities = [
-  'الكل', 'الرياض', 'جدة', 'مكة', 'المدينة',
-  'الدمام', 'الخبر', 'الطائف', 'أبها', 'تبوك', 'القصيم',
+  'جدة', 'الرياض', 'مكة', 'المدينة',
+  'الدمام', 'الخبر', 'أبها', 'تبوك', 'القصيم',
 ];
 
 class HomeScreen extends StatefulWidget {
@@ -49,7 +50,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Map<String, dynamic>? _topExperience;
   bool _loading = true;
   String _selectedCategory = 'الكل';
-  String _selectedCity = 'الكل';
+  String _selectedCity = 'جدة'; // last-resort default; replaced by _loadCity()
   String? _selectedMood;
   Map<String, dynamic>? _selectedExp;
   final _profileRefreshNotifier = ValueNotifier<int>(0);
@@ -220,13 +221,46 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _loadCity() async {
     final prefs = await SharedPreferences.getInstance();
-    final city = prefs.getString('selected_city') ?? 'الكل';
-    if (mounted) setState(() => _selectedCity = city);
+    String? city;
+
+    // Source of truth: users.city (this is where onboarding saved it).
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    if (me != null) {
+      try {
+        final row = await Supabase.instance.client
+            .from('users')
+            .select('city')
+            .eq('id', me)
+            .maybeSingle();
+        final dbCity = (row?['city'] ?? '').toString().trim();
+        if (dbCity.isNotEmpty) {
+          city = dbCity;
+          await prefs.setString('selected_city', dbCity); // keep local cache fresh
+        }
+      } catch (e) {
+        debugPrint('[home] load city (db) error: $e');
+      }
+    }
+
+    city ??= prefs.getString('selected_city'); // local cache fallback
+    final resolved = (city == null || city.trim().isEmpty) ? 'جدة' : city.trim();
+    if (mounted) setState(() => _selectedCity = resolved);
   }
 
   Future<void> _saveCity(String city) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('selected_city', city);
+    await prefs.setString('selected_city', city); // fast local cache
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    if (me != null) {
+      try {
+        await Supabase.instance.client
+            .from('users')
+            .update({'city': city})
+            .eq('id', me); // durable, source of truth
+      } catch (e) {
+        debugPrint('[home] save city (db) error: $e');
+      }
+    }
   }
 
   // ── Data loading ───────────────────────────────────────────────────────────
@@ -401,13 +435,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   List<Map<String, dynamic>> get _filtered {
     var list = _experiences;
 
-    // City filter
-    if (_selectedCity != 'الكل') {
-      list = list.where((e) {
-        final city = (e['restaurant']?['city'] ?? '').toString().trim();
-        return city == _selectedCity || city.contains(_selectedCity);
-      }).toList();
-    }
+    // City filter — always applied (every user has a real city, no "الكل").
+    list = list.where((e) {
+      final city = (e['restaurant']?['city'] ?? '').toString().trim();
+      return city == _selectedCity || city.contains(_selectedCity);
+    }).toList();
 
     // Category filter — strip emojis from stored value, handle both String and List
     if (_selectedCategory != 'الكل') {
@@ -544,9 +576,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       child: Row(
                         children: [
                           Icon(
-                            city == 'الكل'
-                                ? PhosphorIcons.globe()
-                                : PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                            PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
                             color: selected ? _kOrange : _kTextSec,
                             size: 16,
                           ),
@@ -769,11 +799,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               duration: const Duration(milliseconds: 200),
               padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
               decoration: BoxDecoration(
-                color: _selectedCity != 'الكل' ? _kOrange.withValues(alpha: 0.15) : _kDark2,
+                color: _kOrange.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: _selectedCity != 'الكل' ? _kOrange : Colors.white.withValues(alpha: 0.12),
-                ),
+                border: Border.all(color: _kOrange),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -782,7 +810,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       color: _kOrange, size: 13),
                   const SizedBox(width: 4),
                   Text(
-                    _selectedCity == 'الكل' ? 'الرياض' : _selectedCity,
+                    _selectedCity,
                     style: _tj(12, FontWeight.w600, Colors.white),
                   ),
                   const SizedBox(width: 3),
