@@ -220,7 +220,7 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
     try {
       final res = await Supabase.instance.client
           .from('restaurants')
-          .select('id, name_ar, city, category')
+          .select('id, name_ar, name_en, city, category')
           .or('name_ar.ilike.%$safe%,name_en.ilike.%$safe%')
           .limit(5);
       final list = List<Map<String, dynamic>>.from(res);
@@ -793,6 +793,7 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                       children: _searchResults.map((r) {
                         final city = (r['city'] ?? '').toString().trim();
                         final count = (r['exp_count'] ?? 0) as int;
+                        final nameEn = (r['name_en'] ?? '').toString().trim();
                         final sub = [
                           if (city.isNotEmpty) city,
                           '$count تجربة',
@@ -802,7 +803,25 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                           leading: Icon(
                               PhosphorIcons.storefront(PhosphorIconsStyle.fill),
                               size: 18, color: _kOrange),
-                          title: Text(r['name_ar'] ?? '', style: _tj(12)),
+                          // Show the English name (when present) so a user who
+                          // typed Latin letters recognizes the Arabic match.
+                          title: Row(
+                            children: [
+                              Flexible(
+                                child: Text(r['name_ar'] ?? '',
+                                    style: _tj(12),
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                              if (nameEn.isNotEmpty) ...[
+                                Text(' · ', style: _tj(11, color: _kTextSec)),
+                                Flexible(
+                                  child: Text(nameEn,
+                                      style: _tj(10, color: _kTextSec),
+                                      overflow: TextOverflow.ellipsis),
+                                ),
+                              ],
+                            ],
+                          ),
                           subtitle: Text(sub, style: _tj(10, color: _kTextSec)),
                           onTap: () {
                             setState(() {
