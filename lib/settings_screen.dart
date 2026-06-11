@@ -26,12 +26,14 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _notificationsEnabled = true;
+  bool _invitesFromEveryone = false;
 
   @override
   void initState() {
     super.initState();
     AppLocale.notifier.addListener(_onLocaleChange);
     _loadPrefs();
+    _loadInvitePref();
   }
 
   void _onLocaleChange() {
@@ -57,6 +59,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _notificationsEnabled = val);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('notifications_enabled', val);
+  }
+
+  Future<void> _loadInvitePref() async {
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    if (me == null) return;
+    try {
+      final row = await Supabase.instance.client
+          .from('users')
+          .select('invites_from_everyone')
+          .eq('id', me)
+          .maybeSingle();
+      if (mounted) {
+        setState(
+            () => _invitesFromEveryone = row?['invites_from_everyone'] == true);
+      }
+    } catch (e) {
+      debugPrint('[settings] invite pref load: $e');
+    }
+  }
+
+  Future<void> _toggleInvites(bool val) async {
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    if (me == null) return;
+    setState(() => _invitesFromEveryone = val); // optimistic
+    try {
+      await Supabase.instance.client
+          .from('users')
+          .update({'invites_from_everyone': val}).eq('id', me);
+    } catch (e) {
+      debugPrint('[settings] invite pref save: $e');
+      if (mounted) setState(() => _invitesFromEveryone = !val); // revert
+    }
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -110,6 +144,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   label: 'الإشعارات',
                   value: _notificationsEnabled,
                   onChanged: _toggleNotifications,
+                ),
+                _switchTile(
+                  icon: PhosphorIcons.userCheck(),
+                  label: 'استقبال الدعوات من الكل',
+                  subtitle:
+                      'عند الإيقاف، تصلك الدعوات فقط ممن تتابعهم ويتابعونك',
+                  value: _invitesFromEveryone,
+                  onChanged: _toggleInvites,
                 ),
 
                 const SizedBox(height: 24),
@@ -247,6 +289,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String label,
     required bool value,
     required ValueChanged<bool> onChanged,
+    String? subtitle,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -260,7 +303,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           Icon(icon, color: _kOrange, size: 20),
           const SizedBox(width: 12),
-          Expanded(child: Text(label, style: _tj(13, FontWeight.w600, Colors.white))),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: _tj(13, FontWeight.w600, Colors.white)),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 3),
+                  Text(subtitle, style: _tj(11, FontWeight.w400, _kTextSec)),
+                ],
+              ],
+            ),
+          ),
           Switch(
             value: value,
             onChanged: onChanged,

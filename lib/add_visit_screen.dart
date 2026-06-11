@@ -122,21 +122,41 @@ class _AddVisitScreenState extends State<AddVisitScreen> {
     final me = _client.auth.currentUser?.id;
     if (me == null) return;
     try {
-      final f = await _client
+      // People I follow (candidates to invite).
+      final following = await _client
           .from('follows')
           .select('following_id')
           .eq('follower_id', me);
-      final ids =
-          (f as List).map((r) => r['following_id']).whereType<Object>().toList();
-      if (ids.isEmpty) return;
+      final followingIds = (following as List)
+          .map((r) => r['following_id']?.toString())
+          .whereType<String>()
+          .toList();
+      if (followingIds.isEmpty) return;
+
+      // People who follow me — for the mutual-follow check.
+      final followers = await _client
+          .from('follows')
+          .select('follower_id')
+          .eq('following_id', me);
+      final followerIds = (followers as List)
+          .map((r) => r['follower_id']?.toString())
+          .whereType<String>()
+          .toSet();
+
+      // Candidates + each one's invite-privacy flag.
       final users = await _client
           .from('users')
-          .select('id, display_name, username, avatar_url')
-          .inFilter('id', ids);
-      if (mounted) {
-        setState(() =>
-            _follows = List<Map<String, dynamic>>.from(users as List));
+          .select('id, display_name, username, avatar_url, invites_from_everyone')
+          .inFilter('id', followingIds);
+      final list = List<Map<String, dynamic>>.from(users as List);
+      for (final u in list) {
+        final id = u['id'].toString();
+        final open = u['invites_from_everyone'] == true;
+        // Can invite if they accept from everyone OR it's a mutual follow.
+        u['can_invite'] = open || followerIds.contains(id);
       }
+
+      if (mounted) setState(() => _follows = list);
     } catch (e) {
       debugPrint('[add_visit] follows error: $e');
     }
@@ -231,30 +251,63 @@ class _AddVisitScreenState extends State<AddVisitScreen> {
       'note': note.isEmpty ? null : note,
     };
 
+    debugPrint('═══════════ [add_visit] _save() START ═══════════');
+    debugPrint('[add_visit] isEdit=$_isEdit  me=$me');
+    debugPrint('[add_visit] restaurant_id=${_restaurant!['id']} '
+        '(type ${_restaurant!['id'].runtimeType})');
+    debugPrint('[add_visit] payload=$payload');
+    debugPrint('[add_visit] invitees=$_invitees  '
+        'original=$_originalInvitees');
+
     try {
       String visitId;
       if (_isEdit) {
         visitId = widget.existingVisit!['id'].toString();
-        await _client.from('visits').update(payload).eq('id', visitId);
+        debugPrint('[add_visit] → UPDATE visits id=$visitId ...');
+        try {
+          await _client.from('visits').update(payload).eq('id', visitId);
+          debugPrint('[add_visit] ✓ visits UPDATE ok');
+        } catch (e) {
+          debugPrint('[add_visit] ✗ visits UPDATE FAILED: $e');
+          rethrow;
+        }
       } else {
-        final row = await _client
-            .from('visits')
-            .insert({...payload, 'owner_id': me})
-            .select()
-            .single();
-        visitId = row['id'].toString();
+        debugPrint('[add_visit] → INSERT visits (owner_id=$me) ...');
+        try {
+          final row = await _client
+              .from('visits')
+              .insert({...payload, 'owner_id': me})
+              .select()
+              .single();
+          visitId = row['id'].toString();
+          debugPrint('[add_visit] ✓ visits INSERT ok → visitId=$visitId');
+        } catch (e) {
+          debugPrint('[add_visit] ✗ visits INSERT FAILED: $e');
+          rethrow;
+        }
       }
 
       // Diff invitees (in create mode _originalInvitees is empty → all are new).
       final toAdd = _invitees.difference(_originalInvitees);
       final toRemove = _originalInvitees.difference(_invitees);
+      debugPrint('[add_visit] toAdd=$toAdd  toRemove=$toRemove');
 
       if (toAdd.isNotEmpty) {
-        await _client.from('visit_invites').insert([
+        final inviteRows = [
           for (final uid in toAdd)
             {'visit_id': visitId, 'invitee_id': uid, 'status': 'pending'},
-        ]);
-        await _client.from('notifications').insert([
+        ];
+        debugPrint('[add_visit] → INSERT visit_invites (${toAdd.length}): '
+            '$inviteRows');
+        try {
+          await _client.from('visit_invites').insert(inviteRows);
+          debugPrint('[add_visit] ✓ visit_invites INSERT ok');
+        } catch (e) {
+          debugPrint('[add_visit] ✗ visit_invites INSERT FAILED: $e');
+          rethrow;
+        }
+
+        final notifRows = [
           for (final uid in toAdd)
             {
               'user_id': uid,
@@ -263,25 +316,56 @@ class _AddVisitScreenState extends State<AddVisitScreen> {
               'visit_id': visitId,
               'is_read': false,
             },
-        ]);
+        ];
+        debugPrint('[add_visit] → INSERT notifications (${toAdd.length}): '
+            '$notifRows');
+        try {
+          await _client.from('notifications').insert(notifRows);
+          debugPrint('[add_visit] ✓ notifications INSERT ok');
+        } catch (e) {
+          debugPrint('[add_visit] ✗ notifications INSERT FAILED: $e');
+          rethrow;
+        }
       }
       if (toRemove.isNotEmpty) {
-        await _client
-            .from('visit_invites')
-            .delete()
-            .eq('visit_id', visitId)
-            .inFilter('invitee_id', toRemove.toList());
+        debugPrint('[add_visit] → DELETE visit_invites for $toRemove ...');
+        try {
+          await _client
+              .from('visit_invites')
+              .delete()
+              .eq('visit_id', visitId)
+              .inFilter('invitee_id', toRemove.toList());
+          debugPrint('[add_visit] ✓ visit_invites DELETE ok');
+        } catch (e) {
+          debugPrint('[add_visit] ✗ visit_invites DELETE FAILED: $e');
+          rethrow;
+        }
       }
 
+      debugPrint('═══════════ [add_visit] _save() SUCCESS ═══════════');
       if (mounted) Navigator.pop(context, true);
-    } catch (e) {
+    } catch (e, st) {
       debugPrint('[add_visit] save error: $e');
+      debugPrint('[add_visit] error type: ${e.runtimeType}');
+      if (e is PostgrestException) {
+        debugPrint('[add_visit] Postgrest code=${e.code}  '
+            'message=${e.message}  details=${e.details}  hint=${e.hint}');
+      }
+      debugPrint('[add_visit] stack:\n$st');
       if (mounted) {
         setState(() => _saving = false);
+        // TEMP DEBUG: surface the real error on-screen so it can be read
+        // without DevTools. Revert to the friendly message once diagnosed.
+        final detail = e is PostgrestException
+            ? 'code=${e.code} · ${e.message}'
+            : e.toString();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content:
-                  Text('تعذّر الحفظ، حاول مجددًا', style: GoogleFonts.tajawal())),
+            duration: const Duration(seconds: 12),
+            backgroundColor: const Color(0xFF7F1D1D),
+            content: Text('SAVE FAILED: $detail',
+                style: GoogleFonts.tajawal(), maxLines: 6),
+          ),
         );
       }
     }
@@ -537,8 +621,54 @@ class _AddVisitScreenState extends State<AddVisitScreen> {
 
   Widget _friendTile(Map<String, dynamic> u) {
     final id = u['id'].toString();
-    final selected = _invitees.contains(id);
     final name = u['display_name']?.toString() ?? 'مستخدم';
+    final canInvite = u['can_invite'] == true;
+
+    // Locked + not a mutual follow → show greyed out with an explanatory note.
+    if (!canInvite) {
+      return Opacity(
+        opacity: 0.55,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: _kCardBg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+          child: Row(
+            children: [
+              AppAvatar(
+                displayName: name,
+                username: (u['username'] ?? '').toString(),
+                avatarUrl: u['avatar_url']?.toString(),
+                size: 38,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        style: _tj(13, weight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 2),
+                    Text('لا يستقبل دعوات إلا من المتابَعين المتبادلين',
+                        style: _tj(10, color: _kTextSec),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              const Icon(Icons.lock_outline, color: _kTextSec, size: 18),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final selected = _invitees.contains(id);
     return GestureDetector(
       onTap: () => setState(() {
         if (!_invitees.add(id)) _invitees.remove(id);
