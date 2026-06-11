@@ -34,7 +34,12 @@ class SearchScreen extends StatefulWidget {
   /// When set, the screen opens pre-filtered by this query on the التجارب tab.
   final String? initialQuery;
 
-  const SearchScreen({super.key, this.initialQuery});
+  /// When set (e.g. tapped from a map pin), the التجارب tab loads ONLY this
+  /// restaurant's experiences by id — until the user edits the search box.
+  final String? initialRestaurantId;
+
+  const SearchScreen(
+      {super.key, this.initialQuery, this.initialRestaurantId});
 
   @override
   State<SearchScreen> createState() => _SearchScreenState();
@@ -47,6 +52,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   int _activeTab = 0; // 0=التجارب  1=المطاعم  2=الأشخاص
   String _searchQuery = '';
+  String? _restaurantId; // pin filter; cleared once the user edits the box
 
   List<Map<String, dynamic>> _experiences = [];
   List<Map<String, dynamic>> _restaurants = [];
@@ -65,6 +71,7 @@ class _SearchScreenState extends State<SearchScreen> {
       _searchQuery = initial;
       _activeTab = 0; // التجارب
     }
+    _restaurantId = widget.initialRestaurantId; // pin → filter by id
     _loadMyFollowing();
     _loadData(); // first load → all results for the default tab
   }
@@ -148,8 +155,9 @@ class _SearchScreenState extends State<SearchScreen> {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), () {
       final q = value.trim();
-      if (q == _searchQuery) return;
+      if (q == _searchQuery && _restaurantId == null) return;
       _searchQuery = q;
+      _restaurantId = null; // user edited → revert to normal text search
       _loadData();
     });
   }
@@ -189,6 +197,24 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Future<void> _loadExperiences(String q) async {
     final client = Supabase.instance.client;
+
+    // Pinned to a specific restaurant (tapped from the map) → filter by id,
+    // bypassing the name-based search entirely.
+    if (_restaurantId != null) {
+      final res = await client
+          .from('experiences')
+          .select(_kExpSelect)
+          .eq('restaurant_id', _restaurantId!)
+          .order('created_at', ascending: false)
+          .limit(20);
+      if (mounted && _activeTab == 0) {
+        setState(() {
+          _experiences = List<Map<String, dynamic>>.from(res);
+          _loading = false;
+        });
+      }
+      return;
+    }
 
     if (q.isEmpty) {
       final res = await client

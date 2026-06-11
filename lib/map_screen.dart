@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -37,6 +38,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   LatLng _center = kFallbackCenter;
   List<Map<String, dynamic>> _restaurants = [];
   LatLng? _userPosition;
+  String? _selectedRestaurantId; // pin whose name label is shown
 
   @override
   void initState() {
@@ -98,6 +100,20 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   Future<void> _goToMyLocation() async {
     try {
+      if (kIsWeb) {
+        // iOS Safari: call getCurrentPosition directly inside the tap handler,
+        // with no awaits before it, so the user-gesture activation isn't lost.
+        // checkPermission via the Permissions API is unreliable on Safari.
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings:
+              const LocationSettings(accuracy: LocationAccuracy.high),
+        );
+        final here = LatLng(pos.latitude, pos.longitude);
+        if (mounted) setState(() => _userPosition = here);
+        _animatedMove(here, 14);
+        return;
+      }
+      // Native path (unchanged).
       if (!await Geolocator.isLocationServiceEnabled()) {
         _denied();
         return;
@@ -212,7 +228,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => SearchScreen(initialQuery: name),
+                      builder: (_) => SearchScreen(
+                        initialRestaurantId: rest['id']?.toString(),
+                        initialQuery: name,
+                      ),
                     ),
                   );
                 },
@@ -236,54 +255,62 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   List<Marker> _markers() {
-    final markers = <Marker>[
-      for (final rest in _restaurants)
-        if (rest['latitude'] != null && rest['longitude'] != null)
-          Marker(
-            point: LatLng((rest['latitude'] as num).toDouble(),
-                (rest['longitude'] as num).toDouble()),
-            width: 130,
-            height: 58,
-            alignment: Alignment.topCenter,
-            child: GestureDetector(
-              onTap: () => _showRestaurantSheet(rest),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 30,
-                    height: 30,
-                    decoration: BoxDecoration(
-                      color: _kOrange,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.4),
-                            blurRadius: 4)
-                      ],
-                    ),
-                    child: Icon(PhosphorIcons.forkKnife(PhosphorIconsStyle.fill),
-                        size: 15, color: Colors.white),
-                  ),
-                  const SizedBox(height: 2),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: _kDark2.withValues(alpha: 0.9),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(rest['name_ar']?.toString() ?? '',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: _tj(10, weight: FontWeight.w700)),
-                  ),
-                ],
+    final markers = <Marker>[];
+    for (final rest in _restaurants) {
+      if (rest['latitude'] == null || rest['longitude'] == null) continue;
+      final id = rest['id']?.toString();
+      final isSelected = id != null && id == _selectedRestaurantId;
+      markers.add(Marker(
+        point: LatLng((rest['latitude'] as num).toDouble(),
+            (rest['longitude'] as num).toDouble()),
+        width: 130,
+        height: isSelected ? 58 : 34,
+        alignment: Alignment.topCenter,
+        child: GestureDetector(
+          onTap: () {
+            setState(() => _selectedRestaurantId = id);
+            _showRestaurantSheet(rest);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: _kOrange,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.4),
+                        blurRadius: 4)
+                  ],
+                ),
+                child: Icon(PhosphorIcons.forkKnife(PhosphorIconsStyle.fill),
+                    size: 15, color: Colors.white),
               ),
-            ),
+              // Name label only for the selected pin (keeps the map clean).
+              if (isSelected) ...[
+                const SizedBox(height: 2),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _kDark2.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(rest['name_ar']?.toString() ?? '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _tj(10, weight: FontWeight.w700)),
+                ),
+              ],
+            ],
           ),
-    ];
+        ),
+      ));
+    }
     if (_userPosition != null) {
       markers.add(Marker(
         point: _userPosition!,
@@ -344,9 +371,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                         urlTemplate:
                             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                         userAgentPackageName: 'com.aishay.app',
-                        tileBuilder: (context, tileWidget, tile) =>
-                            ColorFiltered(
-                                colorFilter: kDarkenTiles, child: tileWidget),
                       ),
                       MarkerLayer(markers: _markers()),
                     ],
