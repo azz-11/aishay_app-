@@ -1,4 +1,3 @@
-import 'package:flutter/widgets.dart';
 import 'package:latlong2/latlong.dart';
 
 /// City → coordinates (the 9 onboarding cities). Used to center maps on the
@@ -21,11 +20,3 @@ LatLng cityCenter(String? city) =>
     (city != null && kCityCoords.containsKey(city))
         ? kCityCoords[city]!
         : kFallbackCenter;
-
-/// Uniformly darken OSM tiles so orange pins pop (keeps the map legible).
-const kDarkenTiles = ColorFilter.matrix(<double>[
-  0.6, 0, 0, 0, 0,
-  0, 0.6, 0, 0, 0,
-  0, 0, 0.6, 0, 0,
-  0, 0, 0, 1, 0,
-]);

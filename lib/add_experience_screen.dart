@@ -986,12 +986,10 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                             children: [
                               TileLayer(
                                 urlTemplate:
-                                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                                subdomains: const ['a', 'b', 'c'],
+                                retinaMode: RetinaMode.isHighDensity(context),
                                 userAgentPackageName: 'com.aishay.app',
-                                tileBuilder: (context, tileWidget, tile) =>
-                                    ColorFiltered(
-                                        colorFilter: kDarkenTiles,
-                                        child: tileWidget),
                               ),
                             ],
                           ),
