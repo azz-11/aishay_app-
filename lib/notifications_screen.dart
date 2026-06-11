@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'experience_detail_screen.dart';
 import 'user_profile_screen.dart';
@@ -314,11 +315,22 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(AppStrings.notificationsTitle,
-                    style: GoogleFonts.tajawal(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white)),
+                Row(
+                  children: [
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => Navigator.maybePop(context),
+                      child: Icon(PhosphorIcons.caretRight(),
+                          color: Colors.white, size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(AppStrings.notificationsTitle,
+                        style: GoogleFonts.tajawal(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white)),
+                  ],
+                ),
                 GestureDetector(
                   onTap: _loadNotifications,
                   child: const Icon(Icons.refresh_rounded,

@@ -306,6 +306,17 @@ class _SearchScreenState extends State<SearchScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
+                    // Back button only when pushed (e.g. from the map);
+                    // hidden when shown as the home "explore" tab.
+                    if (Navigator.canPop(context)) ...[
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => Navigator.maybePop(context),
+                        child: Icon(PhosphorIcons.caretRight(),
+                            color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
                     Expanded(
                       child: Text(AppStrings.exploreRestaurants,
                           style: _tj(20, FontWeight.w900, Colors.white)),
