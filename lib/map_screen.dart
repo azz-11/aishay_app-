@@ -55,6 +55,39 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   Future<void> _boot() async {
     await Future.wait([_loadCenter(), _loadRestaurants()]);
     if (mounted) setState(() => _loading = false);
+    // After the map paints at the city fallback, try to zoom onto the user.
+    _centerOnUserOrCity();
+  }
+
+  /// Snapchat-style open: zoom onto the user's actual location if we can get
+  /// it; otherwise stay on the city center (the FlutterMap fallback).
+  Future<void> _centerOnUserOrCity() async {
+    try {
+      final Position pos;
+      if (kIsWeb) {
+        // iOS Safari: request directly so the call isn't blocked by pre-checks.
+        pos = await Geolocator.getCurrentPosition(
+          locationSettings:
+              const LocationSettings(accuracy: LocationAccuracy.high),
+        );
+      } else {
+        if (!await Geolocator.isLocationServiceEnabled()) return;
+        var perm = await Geolocator.checkPermission();
+        if (perm == LocationPermission.denied) {
+          perm = await Geolocator.requestPermission();
+        }
+        if (perm == LocationPermission.denied ||
+            perm == LocationPermission.deniedForever) {
+          return; // keep city fallback
+        }
+        pos = await Geolocator.getCurrentPosition();
+      }
+      final here = LatLng(pos.latitude, pos.longitude);
+      if (mounted) setState(() => _userPosition = here);
+      _animatedMove(here, 15.5); // close zoom on nearby places
+    } catch (e) {
+      debugPrint('[map] center-on-user skipped: $e'); // stay on city center
+    }
   }
 
   Future<void> _loadCenter() async {
@@ -157,6 +190,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   void _showRestaurantSheet(Map<String, dynamic> rest) {
+    debugPrint('[map] sheet opening');
     final name = rest['name_ar']?.toString() ?? 'مطعم';
     final city = rest['city']?.toString() ?? '';
     final rating = (rest['avg_rating'] as num?)?.toDouble() ?? 0.0;
@@ -264,49 +298,60 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         point: LatLng((rest['latitude'] as num).toDouble(),
             (rest['longitude'] as num).toDouble()),
         width: 130,
-        height: isSelected ? 58 : 34,
+        height: isSelected ? 72 : 56,
         alignment: Alignment.topCenter,
         child: GestureDetector(
+          // Opaque + full-size hitbox so the tap reliably wins the gesture
+          // arena against the map's pan (was getting swallowed on web).
+          behavior: HitTestBehavior.opaque,
           onTap: () {
+            debugPrint('[map] pin tapped: ${rest['name_ar']}');
             setState(() => _selectedRestaurantId = id);
             _showRestaurantSheet(rest);
           },
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: _kOrange,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.4),
-                        blurRadius: 4)
-                  ],
-                ),
-                child: Icon(PhosphorIcons.forkKnife(PhosphorIconsStyle.fill),
-                    size: 15, color: Colors.white),
-              ),
-              // Name label only for the selected pin (keeps the map clean).
-              if (isSelected) ...[
-                const SizedBox(height: 2),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _kDark2.withValues(alpha: 0.9),
-                    borderRadius: BorderRadius.circular(6),
+          child: SizedBox.expand(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: _kOrange,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.4),
+                            blurRadius: 4)
+                      ],
+                    ),
+                    child: Icon(
+                        PhosphorIcons.forkKnife(PhosphorIconsStyle.fill),
+                        size: 15,
+                        color: Colors.white),
                   ),
-                  child: Text(rest['name_ar']?.toString() ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: _tj(10, weight: FontWeight.w700)),
-                ),
-              ],
-            ],
+                  // Name label only for the selected pin (keeps the map clean).
+                  if (isSelected) ...[
+                    const SizedBox(height: 2),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _kDark2.withValues(alpha: 0.9),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(rest['name_ar']?.toString() ?? '',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: _tj(10, weight: FontWeight.w700)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ));
@@ -359,7 +404,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                     mapController: _mapController,
                     options: MapOptions(
                       initialCenter: _center,
-                      initialZoom: 12,
+                      initialZoom: 13, // city fallback; user GPS zooms to 15.5
                       minZoom: 4,
                       maxZoom: 18,
                       interactionOptions: const InteractionOptions(
