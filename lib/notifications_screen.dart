@@ -232,7 +232,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       }
     }
 
-    if (type == 'like' || type == 'save' || type == 'comment') {
+    if (type == 'like' ||
+        type == 'save' ||
+        type == 'comment' ||
+        type == 'comment_reply') {
       if (experienceId == null) return;
       try {
         final exp = await Supabase.instance.client
@@ -278,6 +281,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     switch (type) {
       case 'like':    return '${AppStrings.likedExperience}$rest 🔥';
       case 'comment': return '${AppStrings.commentedOn}$rest 💬';
+      // No emoji here — keep it tofu-safe on iOS (per design).
+      case 'comment_reply': return AppStrings.isArabic
+          ? 'ردّ على تعليقك$rest'
+          : 'replied to your comment$rest';
       case 'save':    return '${AppStrings.savedExperience}$rest 📍';
       case 'follow':  return '${AppStrings.startedFollowing} 👤';
       default:        return AppStrings.isArabic
