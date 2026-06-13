@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -8,6 +9,7 @@ import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'search_screen.dart';
 import 'utils/map_utils.dart';
+import 'utils/osm_search.dart';
 
 const _kDark = Color(0xFF0F1923);
 const _kDark2 = Color(0xFF1A2340);
@@ -39,6 +41,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   List<Map<String, dynamic>> _restaurants = [];
   LatLng? _userPosition;
   String? _selectedRestaurantId; // pin whose name label is shown
+  String _userCity = ''; // for biasing the search
+
+  // ── Search bar ──
+  final _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
+  List<OsmPlace> _osmResults = [];
+  List<Map<String, dynamic>> _dbMatches = [];
+  LatLng? _tempPin; // highlighted pin dropped on a searched location
 
   @override
   void initState() {
@@ -48,6 +58,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _searchCtrl.dispose();
     _mapController.dispose();
     super.dispose();
   }
@@ -90,6 +102,66 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
 
+  // ── Search (OSM + our restaurants) ──────────────────────────────────────────
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    final q = value.trim();
+    if (q.length < 2) {
+      setState(() {
+        _osmResults = [];
+        _dbMatches = [];
+      });
+      return;
+    }
+    _searchDebounce =
+        Timer(const Duration(milliseconds: 400), () => _runSearch(q));
+  }
+
+  Future<void> _runSearch(String q) async {
+    // Our own restaurants by name.
+    try {
+      final safe = q.replaceAll(RegExp(r'[,()]'), ' ').trim();
+      final res = await _client
+          .from('restaurants')
+          .select('id, name_ar, city, avg_rating, latitude, longitude')
+          .or('name_ar.ilike.%$safe%,name_en.ilike.%$safe%')
+          .limit(5);
+      if (mounted) {
+        setState(() => _dbMatches = List<Map<String, dynamic>>.from(res));
+      }
+    } catch (e) {
+      debugPrint('[map] db search error: $e');
+    }
+    // OpenStreetMap food places (biased to the user's city).
+    final osm = await searchOsm(q, city: _userCity.isNotEmpty ? _userCity : null);
+    if (mounted) setState(() => _osmResults = osm);
+  }
+
+  void _goToOsmPlace(OsmPlace p) {
+    final dest = LatLng(p.lat, p.lon);
+    setState(() {
+      _tempPin = dest;
+      _osmResults = [];
+      _dbMatches = [];
+      _searchCtrl.text = p.name;
+      FocusScope.of(context).unfocus();
+    });
+    _animatedMove(dest, 16);
+  }
+
+  void _goToDbRestaurant(Map<String, dynamic> rest) {
+    setState(() {
+      _osmResults = [];
+      _dbMatches = [];
+      _searchCtrl.text = rest['name_ar']?.toString() ?? '';
+      FocusScope.of(context).unfocus();
+    });
+    final lat = (rest['latitude'] as num?)?.toDouble();
+    final lng = (rest['longitude'] as num?)?.toDouble();
+    if (lat != null && lng != null) _animatedMove(LatLng(lat, lng), 16);
+    _showRestaurantSheet(rest);
+  }
+
   Future<void> _loadCenter() async {
     final me = _client.auth.currentUser?.id;
     if (me == null) return;
@@ -97,8 +169,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       final row =
           await _client.from('users').select('city').eq('id', me).maybeSingle();
       final city = row?['city']?.toString();
-      if (city != null && kCityCoords.containsKey(city)) {
-        _center = kCityCoords[city]!;
+      if (city != null) {
+        _userCity = city.trim();
+        if (kCityCoords.containsKey(city)) _center = kCityCoords[city]!;
       }
     } catch (e) {
       debugPrint('[map] center error: $e');
@@ -288,6 +361,99 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     );
   }
 
+  Widget _searchBar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _kCardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 12),
+          Icon(PhosphorIcons.magnifyingGlass(), size: 18, color: _kTextSec),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              textDirection: TextDirection.rtl,
+              style: _tj(13),
+              onChanged: _onSearchChanged,
+              decoration: InputDecoration(
+                hintText: 'ابحث عن مطعم...',
+                hintStyle: _tj(13, color: _kTextSec),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+          if (_searchCtrl.text.isNotEmpty)
+            GestureDetector(
+              onTap: () {
+                _searchDebounce?.cancel();
+                setState(() {
+                  _searchCtrl.clear();
+                  _osmResults = [];
+                  _dbMatches = [];
+                });
+                FocusScope.of(context).unfocus();
+              },
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10),
+                child: Icon(Icons.close, size: 16, color: _kTextSec),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _searchDropdown() {
+    return Container(
+      margin: const EdgeInsets.only(top: 6),
+      constraints: const BoxConstraints(maxHeight: 280),
+      decoration: BoxDecoration(
+        color: _kCardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: ListView(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        children: [
+          // Our own restaurants first.
+          for (final rest in _dbMatches)
+            ListTile(
+              dense: true,
+              leading: Icon(PhosphorIcons.storefront(PhosphorIconsStyle.fill),
+                  size: 18, color: _kOrange),
+              title: Text(rest['name_ar']?.toString() ?? '',
+                  style: _tj(12), overflow: TextOverflow.ellipsis),
+              subtitle: Text((rest['city'] ?? '').toString(),
+                  style: _tj(10, color: _kTextSec)),
+              onTap: () => _goToDbRestaurant(rest),
+            ),
+          // Then OpenStreetMap places.
+          for (final p in _osmResults)
+            ListTile(
+              dense: true,
+              leading: Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                  size: 18, color: _kTextSec),
+              title: Text(p.name,
+                  style: _tj(12), overflow: TextOverflow.ellipsis),
+              subtitle: p.neighborhood.isEmpty
+                  ? null
+                  : Text(p.neighborhood,
+                      style: _tj(10, color: _kTextSec),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+              onTap: () => _goToOsmPlace(p),
+            ),
+        ],
+      ),
+    );
+  }
+
   List<Marker> _markers() {
     final markers = <Marker>[];
     for (final rest in _restaurants) {
@@ -375,6 +541,16 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         ),
       ));
     }
+    // Temporary highlighted pin for a searched location.
+    if (_tempPin != null) {
+      markers.add(Marker(
+        point: _tempPin!,
+        width: 40,
+        height: 40,
+        child: Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+            size: 40, color: _kOrange),
+      ));
+    }
     return markers;
   }
 
@@ -443,13 +619,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                           ],
                         ),
                       ),
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Text('الخريطة',
-                              style: _tj(18, weight: FontWeight.w900)),
-                          const Spacer(),
-                          Text('${_restaurants.length} مطعم',
-                              style: _tj(12, color: _kTextSec)),
+                          Row(
+                            children: [
+                              Text('الخريطة',
+                                  style: _tj(18, weight: FontWeight.w900)),
+                              const Spacer(),
+                              Text('${_restaurants.length} مطعم',
+                                  style: _tj(12, color: _kTextSec)),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          _searchBar(),
+                          if (_dbMatches.isNotEmpty || _osmResults.isNotEmpty)
+                            _searchDropdown(),
                         ],
                       ),
                     ),

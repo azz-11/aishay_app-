@@ -12,6 +12,7 @@ import 'security_utils.dart';
 import 'l10n/app_strings.dart';
 import 'services/gamification_service.dart';
 import 'utils/map_utils.dart';
+import 'utils/osm_search.dart';
 
 const _kSaudiCitiesAdd = [
   'الرياض', 'جدة', 'مكة', 'المدينة',
@@ -100,8 +101,11 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
   String? _restaurantName;
   String _restaurantCity = '';
   List<Map<String, dynamic>> _searchResults = [];
+  List<OsmPlace> _osmResults = []; // OpenStreetMap food places
   Timer? _searchDebounce;
   bool _addingNewRestaurant = false; // user confirmed "add as new" (0 matches)
+  bool _osmSourced = false; // restaurant picked from OSM (coords already known)
+  String _posterCity = ''; // user's city, for biasing the OSM search
 
   // Location (NEW restaurants only) — captured from the mini-map center.
   final _miniMapController = MapController();
@@ -128,6 +132,23 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
       begin: const Offset(1, 0),
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
+    _loadPosterCity();
+  }
+
+  Future<void> _loadPosterCity() async {
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    if (me == null) return;
+    try {
+      final row = await Supabase.instance.client
+          .from('users')
+          .select('city')
+          .eq('id', me)
+          .maybeSingle();
+      final c = (row?['city'] ?? '').toString().trim();
+      if (c.isNotEmpty && mounted) setState(() => _posterCity = c);
+    } catch (e) {
+      debugPrint('[add_exp] poster city load: $e');
+    }
   }
 
   @override
@@ -246,6 +267,19 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
     } catch (e) {
       debugPrint('[add_exp] restaurant search error: $e');
     }
+  }
+
+  Future<void> _searchOsm(String query) async {
+    final q = query.trim();
+    if (q.length < 2) {
+      if (mounted) setState(() => _osmResults = []);
+      return;
+    }
+    final results = await searchOsm(q,
+        city: _posterCity.isNotEmpty
+            ? _posterCity
+            : (_restaurantCity.isNotEmpty ? _restaurantCity : null));
+    if (mounted) setState(() => _osmResults = results);
   }
 
   void _nextStep() {
@@ -786,12 +820,21 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                       _restaurantName = v;
                       _restaurantId = null;
                       _addingNewRestaurant = false;
+                      // Typing clears a prior OSM selection (+ its coords).
+                      if (_osmSourced) {
+                        _lat = null;
+                        _lng = null;
+                      }
+                      _osmSourced = false;
                     });
-                    // Debounce: only fire the search 400ms after typing stops.
+                    // Debounce: search both DB + OSM 400ms after typing stops.
                     _searchDebounce?.cancel();
                     _searchDebounce = Timer(
                       const Duration(milliseconds: 400),
-                      () => _searchRestaurant(v),
+                      () {
+                        _searchRestaurant(v);
+                        _searchOsm(v);
+                      },
                     );
                   },
                 ),
@@ -844,7 +887,54 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                               _restaurantName = r['name_ar'];
                               _restController.text = r['name_ar'] ?? '';
                               _searchResults = [];
+                              _osmResults = [];
                               _addingNewRestaurant = false;
+                              _osmSourced = false;
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ),
+
+                // OpenStreetMap results — shown after our own restaurants.
+                // No rating (OSM has none); tapping links the new restaurant
+                // to the OSM coordinates.
+                if (_osmResults.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    decoration: BoxDecoration(
+                      color: _kCardBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border:
+                          Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                    ),
+                    child: Column(
+                      children: _osmResults.map((p) {
+                        return ListTile(
+                          dense: true,
+                          leading: Icon(
+                              PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                              size: 18, color: _kTextSec),
+                          title: Text(p.name,
+                              style: _tj(12), overflow: TextOverflow.ellipsis),
+                          subtitle: p.neighborhood.isEmpty
+                              ? null
+                              : Text(p.neighborhood,
+                                  style: _tj(10, color: _kTextSec),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                          onTap: () {
+                            setState(() {
+                              _restaurantId = null; // it's a NEW restaurant
+                              _restaurantName = p.name;
+                              _restController.text = p.name;
+                              _lat = p.lat; // link to OSM coordinates
+                              _lng = p.lon;
+                              _osmSourced = true;
+                              _addingNewRestaurant = true;
+                              _searchResults = [];
+                              _osmResults = [];
                             });
                           },
                         );
@@ -856,6 +946,7 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                 // were 0 matches (and they haven't already confirmed).
                 if (_restaurantId == null &&
                     _searchResults.isEmpty &&
+                    _osmResults.isEmpty &&
                     (_restaurantName ?? '').trim().length >= 2 &&
                     !_addingNewRestaurant)
                   GestureDetector(
@@ -942,8 +1033,10 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
                     ),
                   ),
 
-                // Location picker — only when creating a NEW restaurant.
+                // Location picker — only for a NEW restaurant added manually.
+                // Hidden when the place came from OSM (coords already linked).
                 if (_restaurantId == null &&
+                    !_osmSourced &&
                     (_restaurantName ?? '').trim().isNotEmpty) ...[
                   const SizedBox(height: 22),
                   _label('📍 موقع المطعم (اختياري)'),
