@@ -7,9 +7,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'l10n/app_strings.dart';
 import 'search_screen.dart';
 import 'utils/map_utils.dart';
 import 'utils/osm_search.dart';
+import 'utils/osrm_route.dart';
 
 const _kDark = Color(0xFF0F1923);
 const _kDark2 = Color(0xFF1A2340);
@@ -49,6 +52,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   List<OsmPlace> _osmResults = [];
   List<Map<String, dynamic>> _dbMatches = [];
   LatLng? _tempPin; // highlighted pin dropped on a searched location
+  List<LatLng> _routePoints = []; // driving route line (user → restaurant)
 
   @override
   void initState() {
@@ -262,12 +266,41 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     return m < 1000 ? '${m.round()} م' : '${(m / 1000).toStringAsFixed(1)} كم';
   }
 
+  Future<void> _openDirections(double lat, double lng) async {
+    final uri = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      debugPrint('[map] directions launch error: $e');
+    }
+  }
+
   void _showRestaurantSheet(Map<String, dynamic> rest) {
-    debugPrint('[map] sheet opening');
     final name = rest['name_ar']?.toString() ?? 'مطعم';
     final city = rest['city']?.toString() ?? '';
     final rating = (rest['avg_rating'] as num?)?.toDouble() ?? 0.0;
-    final distance = _distanceLabel(rest) ?? '—';
+    final lat = (rest['latitude'] as num?)?.toDouble();
+    final lng = (rest['longitude'] as num?)?.toDouble();
+    final ar = AppStrings.isArabic;
+    final raw = _distanceLabel(rest); // straight-line placeholder
+    final straightLine = raw == null ? null : (ar ? toArabicDigits(raw) : raw);
+
+    // Clear any previous route line before drawing this one.
+    setState(() => _routePoints = []);
+
+    RouteResult? route;
+    var routeLoading = _userPosition != null && lat != null && lng != null;
+    void Function(void Function())? sheetSetState;
+
+    if (routeLoading) {
+      getRoute(_userPosition!, LatLng(lat, lng)).then((r) {
+        route = r;
+        routeLoading = false;
+        if (r != null && mounted) setState(() => _routePoints = r.points);
+        sheetSetState?.call(() {});
+      });
+    }
 
     showModalBottomSheet(
       context: context,
@@ -275,90 +308,161 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-              20, 16, 20, 16 + MediaQuery.of(ctx).padding.bottom),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2)),
-              ),
-              Text(name, style: _tj(18, weight: FontWeight.w900)),
-              const SizedBox(height: 8),
-              Row(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          sheetSetState = setModalState;
+
+          // Distance/ETA line: hint → placeholder → driving result.
+          Widget infoLine;
+          if (_userPosition == null) {
+            infoLine = Text('فعّل موقعك لمعرفة المسافة',
+                style: _tj(13, color: _kTextSec));
+          } else if (routeLoading) {
+            infoLine = Text(
+                straightLine != null ? 'يبعد $straightLine' : '...',
+                style: _tj(13, color: _kTextSec));
+          } else if (route != null) {
+            final d = formatDistance(route!.distanceMeters, arabicDigits: ar);
+            final t = formatDuration(route!.durationSeconds, arabicDigits: ar);
+            infoLine = Text('يبعد $d · $t بالسيارة',
+                style: _tj(13, weight: FontWeight.w700, color: _kOrange));
+          } else {
+            // OSRM failed → fall back to the straight-line distance.
+            infoLine = Text(
+                straightLine != null ? 'يبعد $straightLine' : '—',
+                style: _tj(13, color: _kTextSec));
+          }
+
+          return Directionality(
+            textDirection: TextDirection.rtl,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                  20, 16, 20, 16 + MediaQuery.of(ctx).padding.bottom),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
-                      size: 14, color: _kTextSec),
-                  const SizedBox(width: 5),
-                  Text(city, style: _tj(13, color: _kTextSec)),
-                  const SizedBox(width: 14),
-                  Icon(PhosphorIcons.navigationArrow(),
-                      size: 14, color: _kTextSec),
-                  const SizedBox(width: 5),
-                  Text(distance, style: _tj(13, color: _kTextSec)),
-                  const Spacer(),
-                  if (rating > 0)
-                    Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _kGold.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(8),
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2)),
+                  ),
+                  Text(name, style: _tj(18, weight: FontWeight.w900)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                          size: 14, color: _kTextSec),
+                      const SizedBox(width: 5),
+                      Text(city, style: _tj(13, color: _kTextSec)),
+                      const Spacer(),
+                      if (rating > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 9, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _kGold.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(PhosphorIcons.star(PhosphorIconsStyle.fill),
+                                  size: 12, color: _kGold),
+                              const SizedBox(width: 4),
+                              Text(rating.toStringAsFixed(1),
+                                  style: _tj(12,
+                                      weight: FontWeight.w700, color: _kGold)),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(PhosphorIcons.navigationArrow(),
+                          size: 14, color: _kTextSec),
+                      const SizedBox(width: 5),
+                      Flexible(child: infoLine),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => SearchScreen(
+                                  initialRestaurantId: rest['id']?.toString(),
+                                  initialQuery: name,
+                                ),
+                              ),
+                            );
+                          },
+                          child: Container(
+                            height: 50,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                  colors: [_kOrange, Color(0xFFFF7A1A)]),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Text('عرض التجارب',
+                                style: _tj(15, weight: FontWeight.w800)),
+                          ),
+                        ),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(PhosphorIcons.star(PhosphorIconsStyle.fill),
-                              size: 12, color: _kGold),
-                          const SizedBox(width: 4),
-                          Text(rating.toStringAsFixed(1),
-                              style: _tj(12,
-                                  weight: FontWeight.w700, color: _kGold)),
-                        ],
-                      ),
-                    ),
+                      if (lat != null && lng != null) ...[
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => _openDirections(lat, lng),
+                            child: Container(
+                              height: 50,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: _kOrange, width: 1.4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                      PhosphorIcons.navigationArrow(
+                                          PhosphorIconsStyle.fill),
+                                      size: 16,
+                                      color: _kOrange),
+                                  const SizedBox(width: 6),
+                                  Text('الاتجاهات',
+                                      style: _tj(15,
+                                          weight: FontWeight.w800,
+                                          color: _kOrange)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
-              const SizedBox(height: 18),
-              GestureDetector(
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => SearchScreen(
-                        initialRestaurantId: rest['id']?.toString(),
-                        initialQuery: name,
-                      ),
-                    ),
-                  );
-                },
-                child: Container(
-                  height: 50,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                        colors: [_kOrange, Color(0xFFFF7A1A)]),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child:
-                      Text('عرض التجارب', style: _tj(15, weight: FontWeight.w800)),
-                ),
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
-    );
+    ).whenComplete(() {
+      sheetSetState = null;
+      if (mounted) setState(() => _routePoints = []); // clear line on close
+    });
   }
 
   Widget _searchBar() {
@@ -595,6 +699,16 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                         retinaMode: RetinaMode.isHighDensity(context),
                         userAgentPackageName: 'com.aishay.app',
                       ),
+                      if (_routePoints.isNotEmpty)
+                        PolylineLayer(
+                          polylines: [
+                            Polyline(
+                              points: _routePoints,
+                              color: _kOrange,
+                              strokeWidth: 4,
+                            ),
+                          ],
+                        ),
                       MarkerLayer(markers: _markers()),
                     ],
                   ),
