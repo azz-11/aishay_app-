@@ -434,11 +434,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   List<Map<String, dynamic>> get _filtered {
     var list = _experiences;
+    final myId = Supabase.instance.client.auth.currentUser?.id;
 
-    // City filter — always applied (every user has a real city, no "الكل").
+    // City filter — but never hide the user's OWN posts, and treat a
+    // missing/empty restaurant city as visible everywhere (not black-holed).
     list = list.where((e) {
       final city = (e['restaurant']?['city'] ?? '').toString().trim();
-      return city == _selectedCity || city.contains(_selectedCity);
+      final mine = e['user_id']?.toString() == myId;
+      return mine ||
+          city.isEmpty ||
+          city == _selectedCity ||
+          city.contains(_selectedCity);
     }).toList();
 
     // Category filter — strip emojis from stored value, handle both String and List

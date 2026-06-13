@@ -320,6 +320,21 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
       final user = Supabase.instance.client.auth.currentUser!;
 
       if (_restaurantId == null) {
+        // Default to the poster's own city when none was chosen, so the
+        // restaurant isn't created city-less (which affects feed visibility).
+        var cityToUse = _restaurantCity.trim();
+        if (cityToUse.isEmpty) {
+          try {
+            final row = await Supabase.instance.client
+                .from('users')
+                .select('city')
+                .eq('id', user.id)
+                .maybeSingle();
+            cityToUse = (row?['city'] ?? '').toString().trim();
+          } catch (e) {
+            debugPrint('[add_exp] poster city load: $e');
+          }
+        }
         final rest = await Supabase.instance.client
             .from('restaurants')
             .insert({
@@ -329,7 +344,7 @@ class _AddExperienceScreenState extends State<AddExperienceScreen>
               'created_by': user.id,
               if (_selectedCategories.isNotEmpty)
                 'category': _selectedCategories.join(','),
-              if (_restaurantCity.isNotEmpty) 'city': _restaurantCity,
+              if (cityToUse.isNotEmpty) 'city': cityToUse,
               if (_lat != null) 'latitude': _lat,
               if (_lng != null) 'longitude': _lng,
             })
