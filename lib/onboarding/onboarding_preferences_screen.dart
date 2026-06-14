@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../home_screen.dart';
 import 'onboarding_progress.dart';
+import 'taste_match_screen.dart';
 
 const _kDark = Color(0xFF0F1923);
 const _kOrange = Color(0xFFF26500);
@@ -46,6 +47,23 @@ const _kCategories = [
   'أكلات شعبية',
 ];
 
+const _kAmbiance = [
+  'هادئ',
+  'حيوي',
+  'عائلي',
+  'رومانسي',
+  'فاخر',
+  'بسيط',
+];
+
+const _kTimes = [
+  'صباحاً',
+  'ظهراً',
+  'عصراً',
+  'مساءً',
+  'ليلاً',
+];
+
 const _kMinCategories = 3;
 
 /// Onboarding Step 3 — city (required) + categories (min 3, required).
@@ -61,9 +79,15 @@ class _OnboardingPreferencesScreenState
     extends State<OnboardingPreferencesScreen> {
   String? _city;
   final Set<String> _cats = {};
+  final Set<String> _ambiance = {};
+  final Set<String> _time = {};
   bool _saving = false;
 
-  bool get _valid => _city != null && _cats.length >= _kMinCategories;
+  bool get _valid =>
+      _city != null &&
+      _cats.length >= _kMinCategories &&
+      _ambiance.isNotEmpty &&
+      _time.isNotEmpty;
 
   Future<void> _finish() async {
     if (!_valid || _saving) return;
@@ -74,6 +98,8 @@ class _OnboardingPreferencesScreenState
         await Supabase.instance.client.from('users').update({
           'city': _city,
           'preferred_categories': _cats.join(','),
+          'preferred_ambiance': _ambiance.join(','),
+          'preferred_time': _time.join(','),
           'onboarding_completed': true,
         }).eq('id', user.id);
       }
@@ -81,7 +107,7 @@ class _OnboardingPreferencesScreenState
       HomeScreen.prefetchFeed();
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        MaterialPageRoute(builder: (_) => const TasteMatchScreen()),
         (route) => false,
       );
     } catch (e) {
@@ -183,6 +209,38 @@ class _OnboardingPreferencesScreenState
                             _chip(c, _cats.contains(c), onTap: () {
                               setState(() {
                                 if (!_cats.add(c)) _cats.remove(c);
+                              });
+                            }),
+                        ],
+                      ),
+                      const SizedBox(height: 28),
+                      Text('الجو الذي تفضّله',
+                          style: _tj(14, FontWeight.w800, Colors.white)),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final a in _kAmbiance)
+                            _chip(a, _ambiance.contains(a), onTap: () {
+                              setState(() {
+                                if (!_ambiance.add(a)) _ambiance.remove(a);
+                              });
+                            }),
+                        ],
+                      ),
+                      const SizedBox(height: 28),
+                      Text('وقت الزيارة المفضّل',
+                          style: _tj(14, FontWeight.w800, Colors.white)),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final t in _kTimes)
+                            _chip(t, _time.contains(t), onTap: () {
+                              setState(() {
+                                if (!_time.add(t)) _time.remove(t);
                               });
                             }),
                         ],
