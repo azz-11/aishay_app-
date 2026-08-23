@@ -1,4 +1,4 @@
-﻿import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
@@ -428,7 +428,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // Remove emojis, keep Arabic, ASCII, spaces and commas
   String _stripEmojis(String s) => s.replaceAll(
-        RegExp(r'[^ -؀-ۿ\s,]'),
+        RegExp(r'[^\x00-\x7f\u0600-\u06ff\s,]'),
         '',
       ).trim();
 
